@@ -5,3 +5,4 @@
 CREATE DATABASE conduit_ledger;
 CREATE DATABASE conduit_risk;
 CREATE DATABASE conduit_billing;
+CREATE DATABASE conduit_webhooks;
