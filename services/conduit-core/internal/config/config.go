@@ -17,6 +17,8 @@ type Config struct {
 	LedgerBaseURL       string
 	LedgerCallTimeout   time.Duration
 	WebhooksBaseURL     string
+	RiskBaseURL         string
+	RiskCallTimeout     time.Duration
 	IdempotencyCacheTTL time.Duration
 	RateLimitPerMinute  int
 }
@@ -30,6 +32,8 @@ func Load() (Config, error) {
 		LedgerBaseURL:     os.Getenv("CONDUIT_LEDGER_URL"),
 		LedgerCallTimeout: 5 * time.Second,
 		WebhooksBaseURL:   os.Getenv("CONDUIT_WEBHOOKS_URL"),
+		RiskBaseURL:       os.Getenv("CONDUIT_RISK_URL"),
+		RiskCallTimeout:   5 * time.Second,
 	}
 	if cfg.Port == "" {
 		cfg.Port = "8000"
@@ -48,6 +52,9 @@ func Load() (Config, error) {
 	}
 	if cfg.WebhooksBaseURL == "" {
 		return Config{}, fmt.Errorf("CONDUIT_WEBHOOKS_URL is required")
+	}
+	if cfg.RiskBaseURL == "" {
+		return Config{}, fmt.Errorf("CONDUIT_RISK_URL is required")
 	}
 
 	ttlHours := os.Getenv("IDEMPOTENCY_KEY_TTL_HOURS")

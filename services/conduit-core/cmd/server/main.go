@@ -20,6 +20,7 @@ import (
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/merchant"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/paymentintent"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/ratelimit"
+	"github.com/kartik1pandey/conduit/services/conduit-core/internal/riskclient"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/webhookendpoint"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/webhooksclient"
 	"github.com/kartik1pandey/conduit/services/conduit-core/migrations"
@@ -65,9 +66,10 @@ func main() {
 
 	ledgerClient := ledgerclient.New(cfg.LedgerBaseURL, cfg.InternalJWTSecret, cfg.LedgerCallTimeout)
 	webhooksClient := webhooksclient.New(cfg.WebhooksBaseURL, cfg.InternalJWTSecret, cfg.LedgerCallTimeout)
+	riskClient := riskclient.New(cfg.RiskBaseURL, cfg.InternalJWTSecret, cfg.RiskCallTimeout)
 
 	piStore := paymentintent.NewStore(pool)
-	piHandlers := paymentintent.NewHandlers(piStore, ledgerClient, webhooksClient)
+	piHandlers := paymentintent.NewHandlers(piStore, ledgerClient, riskClient, webhooksClient)
 	webhookEndpointHandlers := webhookendpoint.NewHandlers(webhooksClient)
 
 	mux := http.NewServeMux()

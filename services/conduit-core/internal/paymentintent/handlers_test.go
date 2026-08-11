@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/idempotency"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/ledgerclient"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/merchant"
+	"github.com/kartik1pandey/conduit/services/conduit-core/internal/riskclient"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/webhooksclient"
 	"github.com/kartik1pandey/conduit/services/conduit-core/migrations"
 )
@@ -79,11 +81,63 @@ func fakeWebhooks(t *testing.T, eventCalls *int32) *httptest.Server {
 	return srv
 }
 
+// fakeRiskDecision lets a test flip conduit-risk's mock verdict mid-test
+// (e.g. from "allow" to "decline") without spinning up a new server.
+type fakeRiskDecision struct {
+	mu       sync.Mutex
+	decision string
+	reasons  []string
+}
+
+func newFakeRiskDecision() *fakeRiskDecision {
+	return &fakeRiskDecision{decision: "allow"}
+}
+
+func (d *fakeRiskDecision) set(decision string, reasons []string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.decision = decision
+	d.reasons = reasons
+}
+
+func (d *fakeRiskDecision) get() (string, []string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.decision, d.reasons
+}
+
+// fakeRisk stands in for conduit-risk so confirm's synchronous risk call
+// (Checkpoint 3.2) can be tested without a real classifier/OPA running.
+func fakeRisk(t *testing.T, decision *fakeRiskDecision) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /score", func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		dec, reasons := decision.get()
+		if reasons == nil {
+			reasons = []string{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"payment_intent_id": req["payment_intent_id"],
+			"decision":          dec,
+			"risk_score":        0.1,
+			"stage":             "model",
+			"reasons":           reasons,
+		})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 type testEnv struct {
 	server           *httptest.Server
 	secretKey        string
 	transactionCalls int32
 	eventCalls       int32
+	riskDecision     *fakeRiskDecision
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -114,13 +168,15 @@ func newTestEnv(t *testing.T) *testEnv {
 	m, secretKey, err := merchant.NewStore(pool).Create(ctx, "Test Merchant")
 	require.NoError(t, err)
 
-	env := &testEnv{secretKey: secretKey}
+	env := &testEnv{secretKey: secretKey, riskDecision: newFakeRiskDecision()}
 	ledgerSrv := fakeLedger(t, &env.transactionCalls)
 	webhooksSrv := fakeWebhooks(t, &env.eventCalls)
+	riskSrv := fakeRisk(t, env.riskDecision)
 
 	ledgerClient := ledgerclient.New(ledgerSrv.URL, testJWTSecret, 5*time.Second)
 	webhooksClient := webhooksclient.New(webhooksSrv.URL, testJWTSecret, 5*time.Second)
-	handlers := NewHandlers(NewStore(pool), ledgerClient, webhooksClient)
+	riskClient := riskclient.New(riskSrv.URL, testJWTSecret, 5*time.Second)
+	handlers := NewHandlers(NewStore(pool), ledgerClient, riskClient, webhooksClient)
 	requireIdempotency := idempotency.RequireKey(idempotency.NewStore(pool, redisClient, time.Hour))
 
 	protected := http.NewServeMux()
@@ -195,4 +251,45 @@ func TestPaymentIntentLifecycle(t *testing.T) {
 		require.Equal(t, StatusSucceeded, confirmed.Status)
 		require.Equal(t, int32(1), atomic.LoadInt32(&env.transactionCalls), "a terminal payment intent must not trigger another ledger call")
 	})
+}
+
+// TestConfirm_RiskDeclineBlocksChargeWithNoLedgerEntry is Checkpoint 3.2's
+// exact scenario: "force a high-risk input — payment_intent ends in
+// failed, and no ledger entry exists for it."
+func TestConfirm_RiskDeclineBlocksChargeWithNoLedgerEntry(t *testing.T) {
+	env := newTestEnv(t)
+	client := env.server.Client()
+	env.riskDecision.set("decline", []string{"velocity_limit_exceeded"})
+
+	post := func(path, idemKey, body string) *http.Response {
+		req, err := http.NewRequest(http.MethodPost, env.server.URL+path, strings.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer "+env.secretKey)
+		req.Header.Set("Content-Type", "application/json")
+		if idemKey != "" {
+			req.Header.Set("Idempotency-Key", idemKey)
+		}
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		return resp
+	}
+
+	resp := post("/v1/payment_intents", "decline-create-1", `{"amount":"99999.00","currency":"usd"}`)
+	var pi PaymentIntent
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&pi))
+	resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	confirmResp := post("/v1/payment_intents/"+pi.ID.String()+"/confirm", "decline-confirm-1", `{}`)
+	defer confirmResp.Body.Close()
+	var confirmed PaymentIntent
+	require.NoError(t, json.NewDecoder(confirmResp.Body).Decode(&confirmed))
+	require.Equal(t, http.StatusOK, confirmResp.StatusCode)
+	require.Equal(t, StatusFailed, confirmed.Status)
+	require.NotNil(t, confirmed.FailureReason)
+	require.Contains(t, *confirmed.FailureReason, "velocity_limit_exceeded")
+	require.Equal(t, int32(0), atomic.LoadInt32(&env.transactionCalls), "a declined payment must never reach the ledger")
+
+	require.Eventually(t, func() bool { return atomic.LoadInt32(&env.eventCalls) == 1 }, time.Second, 10*time.Millisecond,
+		"a payment.failed event should have been emitted")
 }
