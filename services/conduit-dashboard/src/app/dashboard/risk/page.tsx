@@ -1,6 +1,8 @@
+import Link from "next/link";
 import { auth } from "@/auth";
 import { Badge, statusTone } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { listRiskDecisions } from "@/lib/coreClient";
 import { formatDate, formatMoney } from "@/lib/format";
 
@@ -13,9 +15,12 @@ export default async function RiskPage() {
       <h1 className="text-2xl font-semibold">Risk decisions</h1>
       <Card>
         {decisions.length === 0 ? (
-          <p className="p-6 text-sm text-[var(--muted)]">
-            No scoring history yet.
-          </p>
+          <EmptyState
+            title="No scoring history yet"
+            description="Every payment confirmation is scored by conduit-risk in real time — confirm a payment to see the decision and reasons show up here."
+            actionHref="/dashboard/transactions/new"
+            actionLabel="Create a payment"
+          />
         ) : (
           <table className="w-full text-sm">
             <thead>
@@ -34,8 +39,13 @@ export default async function RiskPage() {
                   key={d.id}
                   className="border-b border-[var(--border)] last:border-0"
                 >
-                  <td className="px-4 py-3 font-mono text-xs">
-                    {d.payment_intent_id}
+                  <td className="px-4 py-3">
+                    <Link
+                      href={`/dashboard/transactions/${d.payment_intent_id}`}
+                      className="font-mono text-xs text-[var(--accent)] hover:underline"
+                    >
+                      {d.payment_intent_id}
+                    </Link>
                   </td>
                   <td className="px-4 py-3">
                     {formatMoney(d.amount, d.currency)}

@@ -1,0 +1,5 @@
+# Shell scripts run inside Linux containers, where a CRLF-corrupted
+# shebang ("#!/bin/sh\r") fails with a confusing "no such file or
+# directory" — Windows' core.autocrlf can silently convert these to CRLF
+# on checkout otherwise. Force LF regardless of platform or local git config.
+*.sh text eol=lf

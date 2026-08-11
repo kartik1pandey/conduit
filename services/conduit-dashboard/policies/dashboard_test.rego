@@ -30,6 +30,32 @@ test_read_only_cannot_refund if {
 	not allow with input as {"role": "read-only", "action": "refund"}
 }
 
+# --- create_payment / manage_webhooks: same tier as refund ------------------
+
+test_owner_can_create_payment if {
+	allow with input as {"role": "owner", "action": "create_payment"}
+}
+
+test_developer_can_create_payment if {
+	allow with input as {"role": "developer", "action": "create_payment"}
+}
+
+test_read_only_cannot_create_payment if {
+	not allow with input as {"role": "read-only", "action": "create_payment"}
+}
+
+test_owner_can_manage_webhooks if {
+	allow with input as {"role": "owner", "action": "manage_webhooks"}
+}
+
+test_developer_can_manage_webhooks if {
+	allow with input as {"role": "developer", "action": "manage_webhooks"}
+}
+
+test_read_only_cannot_manage_webhooks if {
+	not allow with input as {"role": "read-only", "action": "manage_webhooks"}
+}
+
 # --- invite_user: owner-only, to prevent self/peer privilege escalation ----
 
 test_owner_can_invite_user if {

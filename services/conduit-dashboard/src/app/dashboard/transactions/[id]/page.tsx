@@ -1,8 +1,10 @@
+import Link from "next/link";
 import { auth } from "@/auth";
 import { Badge, statusTone } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { getPaymentIntent } from "@/lib/coreClient";
 import { formatDate, formatMoney } from "@/lib/format";
+import { ConfirmButton } from "./ConfirmButton";
 import { RefundButton } from "./RefundButton";
 
 export default async function TransactionDetailPage({
@@ -16,7 +18,15 @@ export default async function TransactionDetailPage({
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Transaction</h1>
+      <div>
+        <Link
+          href="/dashboard/transactions"
+          className="text-sm text-[var(--muted)] hover:text-[var(--foreground)]"
+        >
+          ← Transactions
+        </Link>
+        <h1 className="mt-1 text-2xl font-semibold">Transaction</h1>
+      </div>
       <Card className="p-6">
         <dl className="grid grid-cols-2 gap-4 text-sm">
           <Field
@@ -39,6 +49,16 @@ export default async function TransactionDetailPage({
             />
           )}
         </dl>
+
+        {(pi.status === "created" || pi.status === "pending") && (
+          <div className="mt-6 border-t border-[var(--border)] pt-6">
+            <p className="mb-3 text-sm text-[var(--muted)]">
+              Confirming scores this payment with conduit-risk and, if allowed,
+              posts a balanced entry to conduit-ledger — live, not simulated.
+            </p>
+            <ConfirmButton paymentIntentId={pi.id} />
+          </div>
+        )}
 
         {pi.status === "succeeded" && (
           <div className="mt-6 border-t border-[var(--border)] pt-6">
