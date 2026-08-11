@@ -59,6 +59,33 @@ services:
       redis:
         condition: service_healthy
 
+  # OPA evaluates policies/risk.rego for conduit-risk — a real sidecar
+  # process, not a Python re-implementation of what OPA would decide. See
+  # docs/learning for why. The image tag matches the version this project's
+  # policy tests were verified against (services/conduit-risk/policies/risk_test.rego).
+  opa:
+    image: openpolicyagent/opa:1.19.0
+    command: ["run", "--server", "--addr", ":8181", "/policies"]
+    volumes:
+      - ./services/conduit-risk/policies:/policies:ro
+    ports:
+      - "8181:8181"
+
+  conduit-risk:
+    build: ./services/conduit-risk
+    env_file: .env
+    environment:
+      RISK_DATABASE_URL: postgres://conduit:conduit@postgres:5432/conduit_risk
+      OPA_URL: http://opa:8181
+      CONDUIT_RISK_PORT: "8001"
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opa:
+        condition: service_started
+
   conduit-core:
     build: ./services/conduit-core
     env_file: .env
@@ -67,6 +94,7 @@ services:
       REDIS_URL: redis://redis:6379
       CONDUIT_LEDGER_URL: http://conduit-ledger:8002
       CONDUIT_WEBHOOKS_URL: http://conduit-webhooks:8003
+      CONDUIT_RISK_URL: http://conduit-risk:8001
       CONDUIT_CORE_PORT: "8000"
     ports:
       - "8000:8000"
@@ -79,9 +107,11 @@ services:
         condition: service_started
       conduit-webhooks:
         condition: service_started
+      conduit-risk:
+        condition: service_started
 
   # --- Add each remaining service below as it's built. Same shape as above:
-  # (repeat the pattern for conduit-risk, conduit-billing, conduit-dashboard)
+  # (repeat the pattern for conduit-billing, conduit-dashboard)
 
 volumes:
   conduit_postgres_data:

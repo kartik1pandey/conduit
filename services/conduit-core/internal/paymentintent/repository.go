@@ -32,14 +32,15 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
+const selectColumns = `id, merchant_id, amount::text, currency, status, COALESCE(description, ''), failure_reason, created_at, updated_at`
+
 func (s *Store) Create(ctx context.Context, merchantID uuid.UUID, amount decimal.Decimal, currency, description string) (PaymentIntent, error) {
 	var pi PaymentIntent
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO payment_intents (merchant_id, amount, currency, description)
 		VALUES ($1, $2, $3, $4)
-		RETURNING id, merchant_id, amount::text, currency, status, COALESCE(description, ''), created_at, updated_at
-	`, merchantID, amount.String(), currency, description).Scan(
-		&pi.ID, &pi.MerchantID, scanDecimal(&pi.Amount), &pi.Currency, &pi.Status, &pi.Description, &pi.CreatedAt, &pi.UpdatedAt,
+		RETURNING `+selectColumns, merchantID, amount.String(), currency, description).Scan(
+		&pi.ID, &pi.MerchantID, scanDecimal(&pi.Amount), &pi.Currency, &pi.Status, &pi.Description, &pi.FailureReason, &pi.CreatedAt, &pi.UpdatedAt,
 	)
 	if err != nil {
 		return PaymentIntent{}, fmt.Errorf("creating payment intent: %w", err)
@@ -50,11 +51,11 @@ func (s *Store) Create(ctx context.Context, merchantID uuid.UUID, amount decimal
 func (s *Store) Get(ctx context.Context, merchantID, id uuid.UUID) (PaymentIntent, error) {
 	var pi PaymentIntent
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, merchant_id, amount::text, currency, status, COALESCE(description, ''), created_at, updated_at
+		SELECT `+selectColumns+`
 		FROM payment_intents
 		WHERE id = $1 AND merchant_id = $2
 	`, id, merchantID).Scan(
-		&pi.ID, &pi.MerchantID, scanDecimal(&pi.Amount), &pi.Currency, &pi.Status, &pi.Description, &pi.CreatedAt, &pi.UpdatedAt,
+		&pi.ID, &pi.MerchantID, scanDecimal(&pi.Amount), &pi.Currency, &pi.Status, &pi.Description, &pi.FailureReason, &pi.CreatedAt, &pi.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PaymentIntent{}, ErrNotFound
@@ -74,15 +75,36 @@ func (s *Store) TransitionStatus(ctx context.Context, merchantID, id uuid.UUID, 
 		UPDATE payment_intents
 		SET status = $4, updated_at = now()
 		WHERE id = $1 AND merchant_id = $2 AND status = $3
-		RETURNING id, merchant_id, amount::text, currency, status, COALESCE(description, ''), created_at, updated_at
-	`, id, merchantID, expectedCurrent, next).Scan(
-		&pi.ID, &pi.MerchantID, scanDecimal(&pi.Amount), &pi.Currency, &pi.Status, &pi.Description, &pi.CreatedAt, &pi.UpdatedAt,
+		RETURNING `+selectColumns, id, merchantID, expectedCurrent, next).Scan(
+		&pi.ID, &pi.MerchantID, scanDecimal(&pi.Amount), &pi.Currency, &pi.Status, &pi.Description, &pi.FailureReason, &pi.CreatedAt, &pi.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PaymentIntent{}, ErrConflict
 	}
 	if err != nil {
 		return PaymentIntent{}, fmt.Errorf("transitioning payment intent: %w", err)
+	}
+	return pi, nil
+}
+
+// TransitionToFailed moves id from expectedCurrent to failed, recording why
+// — used when conduit-risk declines a payment (Checkpoint 3.2), never for a
+// transient dependency failure (see the comment on postToLedger's error
+// handling in handlers.go for that distinction).
+func (s *Store) TransitionToFailed(ctx context.Context, merchantID, id uuid.UUID, expectedCurrent Status, reason string) (PaymentIntent, error) {
+	var pi PaymentIntent
+	err := s.pool.QueryRow(ctx, `
+		UPDATE payment_intents
+		SET status = 'failed', failure_reason = $4, updated_at = now()
+		WHERE id = $1 AND merchant_id = $2 AND status = $3
+		RETURNING `+selectColumns, id, merchantID, expectedCurrent, reason).Scan(
+		&pi.ID, &pi.MerchantID, scanDecimal(&pi.Amount), &pi.Currency, &pi.Status, &pi.Description, &pi.FailureReason, &pi.CreatedAt, &pi.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PaymentIntent{}, ErrConflict
+	}
+	if err != nil {
+		return PaymentIntent{}, fmt.Errorf("transitioning payment intent to failed: %w", err)
 	}
 	return pi, nil
 }

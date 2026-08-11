@@ -7,23 +7,26 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/authn"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/ledgerclient"
+	"github.com/kartik1pandey/conduit/services/conduit-core/internal/riskclient"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/webhooksclient"
 )
 
 type Handlers struct {
 	store    *Store
 	ledger   *ledgerclient.Client
+	risk     *riskclient.Client
 	webhooks *webhooksclient.Client
 }
 
-func NewHandlers(store *Store, ledger *ledgerclient.Client, webhooks *webhooksclient.Client) *Handlers {
-	return &Handlers{store: store, ledger: ledger, webhooks: webhooks}
+func NewHandlers(store *Store, ledger *ledgerclient.Client, risk *riskclient.Client, webhooks *webhooksclient.Client) *Handlers {
+	return &Handlers{store: store, ledger: ledger, risk: risk, webhooks: webhooks}
 }
 
 // Register mounts every payment_intents route on mux. GET needs no
@@ -95,15 +98,15 @@ func (h *Handlers) get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, pi)
 }
 
-// confirm drives created|pending -> succeeded|failed by posting a balanced
-// transaction to conduit-ledger. If the payment intent is already in a
-// terminal state, it's returned as-is (200) instead of reprocessed — that,
-// combined with the ledger call's own deterministic idempotency key, is what
-// makes retrying a confirm (whether a client retry or conduit-core recovering
-// from a crash mid-confirm) safe to do more than once.
-//
-// Risk scoring (docs/ARCHITECTURE.md: "a decline blocks the charge entirely")
-// isn't wired in yet — that's Checkpoint 3.2, once conduit-risk exists.
+// confirm drives created|pending -> succeeded|failed: conduit-risk is called
+// synchronously first, and a decline moves straight to failed with no
+// ledger call at all (Checkpoint 3.2) — the balanced transaction is only
+// ever posted to conduit-ledger once risk has allowed the charge. If the
+// payment intent is already in a terminal state, it's returned as-is (200)
+// instead of reprocessed — that, combined with the ledger call's own
+// deterministic idempotency key, is what makes retrying a confirm (whether
+// a client retry or conduit-core recovering from a crash mid-confirm) safe
+// to do more than once.
 func (h *Handlers) confirm(w http.ResponseWriter, r *http.Request) {
 	merchantID, ok := authn.MerchantIDFromContext(r.Context())
 	if !ok {
@@ -140,6 +143,26 @@ func (h *Handlers) confirm(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	riskResult, err := h.risk.Score(r.Context(), merchantID, pi.ID, pi.Amount, pi.Currency)
+	if err != nil {
+		// A conduit-risk outage is a dependency hiccup, not a decline —
+		// left in "pending" for the same reason a ledger-call failure is,
+		// below: a retry (same key after its lease expires, or a fresh one)
+		// tries again safely.
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("could not score risk: %v", err))
+		return
+	}
+	if riskResult.Decision == "decline" {
+		pi, err = h.store.TransitionToFailed(r.Context(), merchantID, id, StatusPending, strings.Join(riskResult.Reasons, ","))
+		if err != nil {
+			writeError(w, http.StatusConflict, "payment intent status changed concurrently, retry")
+			return
+		}
+		h.emitPaymentFailed(r.Context(), merchantID, pi)
+		writeJSON(w, http.StatusOK, pi)
+		return
+	}
+
 	if err := h.postToLedger(r.Context(), merchantID, pi); err != nil {
 		// Deliberately left in "pending": a transient failure calling
 		// conduit-ledger isn't a risk decline, it's a dependency hiccup. The
@@ -173,6 +196,20 @@ func (h *Handlers) emitPaymentSucceeded(ctx context.Context, merchantID uuid.UUI
 	}
 	if err := h.webhooks.Emit(ctx, merchantID, "payment.succeeded", idempotencyKey, data); err != nil {
 		log.Printf("paymentintent: could not emit payment.succeeded for %s: %v", pi.ID, err)
+	}
+}
+
+func (h *Handlers) emitPaymentFailed(ctx context.Context, merchantID uuid.UUID, pi PaymentIntent) {
+	idempotencyKey := "confirm:" + pi.ID.String() + ":failed"
+	data := map[string]any{
+		"payment_intent_id": pi.ID,
+		"amount":            pi.Amount.StringFixed(2),
+		"currency":          pi.Currency,
+		"status":            pi.Status,
+		"failure_reason":    pi.FailureReason,
+	}
+	if err := h.webhooks.Emit(ctx, merchantID, "payment.failed", idempotencyKey, data); err != nil {
+		log.Printf("paymentintent: could not emit payment.failed for %s: %v", pi.ID, err)
 	}
 }
 

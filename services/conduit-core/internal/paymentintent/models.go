@@ -19,14 +19,15 @@ const (
 )
 
 type PaymentIntent struct {
-	ID          uuid.UUID       `json:"id"`
-	MerchantID  uuid.UUID       `json:"merchant_id"`
-	Amount      decimal.Decimal `json:"amount"`
-	Currency    string          `json:"currency"`
-	Status      Status          `json:"status"`
-	Description string          `json:"description"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	ID            uuid.UUID       `json:"id"`
+	MerchantID    uuid.UUID       `json:"merchant_id"`
+	Amount        decimal.Decimal `json:"amount"`
+	Currency      string          `json:"currency"`
+	Status        Status          `json:"status"`
+	Description   string          `json:"description"`
+	FailureReason *string         `json:"failure_reason,omitempty"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
 }
 
 // IsTerminal reports whether the payment intent has reached a final state
@@ -43,23 +44,25 @@ func (s Status) IsTerminal() bool {
 // currency-aware.
 func (p PaymentIntent) MarshalJSON() ([]byte, error) {
 	type alias struct {
-		ID          uuid.UUID `json:"id"`
-		MerchantID  uuid.UUID `json:"merchant_id"`
-		Amount      string    `json:"amount"`
-		Currency    string    `json:"currency"`
-		Status      Status    `json:"status"`
-		Description string    `json:"description"`
-		CreatedAt   time.Time `json:"created_at"`
-		UpdatedAt   time.Time `json:"updated_at"`
+		ID            uuid.UUID `json:"id"`
+		MerchantID    uuid.UUID `json:"merchant_id"`
+		Amount        string    `json:"amount"`
+		Currency      string    `json:"currency"`
+		Status        Status    `json:"status"`
+		Description   string    `json:"description"`
+		FailureReason *string   `json:"failure_reason,omitempty"`
+		CreatedAt     time.Time `json:"created_at"`
+		UpdatedAt     time.Time `json:"updated_at"`
 	}
 	return json.Marshal(alias{
-		ID:          p.ID,
-		MerchantID:  p.MerchantID,
-		Amount:      p.Amount.StringFixed(2),
-		Currency:    p.Currency,
-		Status:      p.Status,
-		Description: p.Description,
-		CreatedAt:   p.CreatedAt,
-		UpdatedAt:   p.UpdatedAt,
+		ID:            p.ID,
+		MerchantID:    p.MerchantID,
+		Amount:        p.Amount.StringFixed(2),
+		Currency:      p.Currency,
+		Status:        p.Status,
+		Description:   p.Description,
+		FailureReason: p.FailureReason,
+		CreatedAt:     p.CreatedAt,
+		UpdatedAt:     p.UpdatedAt,
 	})
 }

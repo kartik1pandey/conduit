@@ -96,8 +96,26 @@ jobs:
           # sequentially regardless, since none of them call t.Parallel().)
           go test ./... -race -cover -p 1
 
+  # A real Postgres service container, plus a real OPA server (evaluating
+  # the actual policies/risk.rego, not a mock) — OPA is started directly via
+  # `docker run` in the pytest step below rather than as a `services:`
+  # container, since `services:` containers have no way to bind-mount the
+  # checked-out policies/ directory into them.
   test-risk-service:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: conduit
+          POSTGRES_PASSWORD: conduit
+          POSTGRES_DB: conduit_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U conduit"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - name: Check for pyproject.toml
@@ -116,8 +134,19 @@ jobs:
         if: steps.check.outputs.exists == 'true'
         working-directory: services/conduit-risk
         run: |
-          pip install -e ".[dev]"
-          pytest
+          pip install -r requirements.txt
+          docker run -d --rm --name opa-ci -p 8282:8181 \
+            -v "$PWD/policies:/policies:ro" \
+            openpolicyagent/opa:1.19.0 run --server --addr :8181 /policies
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:8282/health && break
+            sleep 0.5
+          done
+          export RISK_DATABASE_URL="postgres://conduit:conduit@localhost:5432/conduit_test"
+          export INTERNAL_JWT_SECRET="ci-test-secret-not-real"
+          export OPA_URL="http://localhost:8282"
+          python -m pytest tests/ -v
+          docker stop opa-ci
 
   test-dashboard:
     runs-on: ubuntu-latest
