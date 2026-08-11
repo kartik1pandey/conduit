@@ -9,6 +9,7 @@ services:
       - "5432:5432"
     volumes:
       - conduit_postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U conduit"]
       interval: 5s
