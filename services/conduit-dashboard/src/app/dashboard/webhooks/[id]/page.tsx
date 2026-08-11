@@ -1,6 +1,8 @@
+import Link from "next/link";
 import { auth } from "@/auth";
 import { Badge, statusTone } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { listWebhookDeliveries } from "@/lib/coreClient";
 import { formatDate } from "@/lib/format";
 
@@ -15,12 +17,23 @@ export default async function WebhookDeliveriesPage({
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Delivery log</h1>
+      <div>
+        <Link
+          href="/dashboard/webhooks"
+          className="text-sm text-[var(--muted)] hover:text-[var(--foreground)]"
+        >
+          ← Webhook endpoints
+        </Link>
+        <h1 className="mt-1 text-2xl font-semibold">Delivery log</h1>
+      </div>
       <Card>
         {deliveries.length === 0 ? (
-          <p className="p-6 text-sm text-[var(--muted)]">
-            No deliveries recorded yet.
-          </p>
+          <EmptyState
+            title="No deliveries recorded yet"
+            description="This endpoint will receive a signed delivery the next time a payment succeeds, fails, or gets refunded for this merchant."
+            actionHref="/dashboard/transactions/new"
+            actionLabel="Create a payment"
+          />
         ) : (
           <table className="w-full text-sm">
             <thead>

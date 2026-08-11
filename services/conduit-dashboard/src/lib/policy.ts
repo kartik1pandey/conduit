@@ -1,6 +1,11 @@
 import type { Role } from "@/lib/users";
 
-export type Action = "view" | "refund" | "invite_user";
+export type Action =
+  | "view"
+  | "refund"
+  | "invite_user"
+  | "create_payment"
+  | "manage_webhooks";
 
 export class PolicyError extends Error {}
 

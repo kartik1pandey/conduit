@@ -2,6 +2,7 @@ import Link from "next/link";
 import { auth } from "@/auth";
 import { Badge, statusTone } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { listPaymentIntents } from "@/lib/coreClient";
 import { formatDate, formatMoney } from "@/lib/format";
 
@@ -13,12 +14,23 @@ export default async function TransactionsPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Transactions</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">Transactions</h1>
+        <Link
+          href="/dashboard/transactions/new"
+          className="inline-flex items-center justify-center rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
+        >
+          New payment
+        </Link>
+      </div>
       <Card>
         {intents.length === 0 ? (
-          <p className="p-6 text-sm text-[var(--muted)]">
-            No payment intents yet.
-          </p>
+          <EmptyState
+            title="No payment intents yet"
+            description="Create a test payment to see it move through risk scoring and the ledger in real time."
+            actionHref="/dashboard/transactions/new"
+            actionLabel="Create your first payment"
+          />
         ) : (
           <table className="w-full text-sm">
             <thead>

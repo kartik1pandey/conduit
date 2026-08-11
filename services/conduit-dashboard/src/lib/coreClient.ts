@@ -92,6 +92,44 @@ export async function getPaymentIntent(
   );
 }
 
+// createPaymentIntent takes idempotencyKey as a caller-supplied argument
+// rather than generating one internally — Stripe's own recommended pattern
+// (and the one every write in this codebase follows): the key is minted
+// once when the form is first rendered and carried through as a hidden
+// field, so a double-click or a network retry of the SAME submission
+// reuses the SAME key and replays core's original response, while two
+// genuinely separate visits to "New Payment" get two different keys and
+// create two different payment intents, exactly as intended.
+export async function createPaymentIntent(
+  merchantId: string,
+  idempotencyKey: string,
+  input: { amount: string; currency: string; description?: string },
+): Promise<PaymentIntent> {
+  return callCore<PaymentIntent>(
+    merchantId,
+    "POST",
+    "/v1/payment_intents",
+    input,
+    { "Idempotency-Key": idempotencyKey },
+  );
+}
+
+// confirmPaymentIntent's key is deterministic per payment intent, same
+// reasoning as refundPaymentIntent below — confirming is conceptually a
+// single action on an existing resource, not a new one each time.
+export async function confirmPaymentIntent(
+  merchantId: string,
+  paymentIntentId: string,
+): Promise<PaymentIntent> {
+  return callCore<PaymentIntent>(
+    merchantId,
+    "POST",
+    `/v1/payment_intents/${paymentIntentId}/confirm`,
+    {},
+    { "Idempotency-Key": `dashboard:confirm:${paymentIntentId}` },
+  );
+}
+
 // refundPaymentIntent's Idempotency-Key is deterministic per payment
 // intent, not randomized per call — every write endpoint in this project
 // requires one (CLAUDE.md non-negotiables), and the whole point is that a
@@ -119,6 +157,25 @@ export type WebhookEndpoint = {
   url: string;
   created_at: string;
 };
+
+export type WebhookEndpointWithSecret = WebhookEndpoint & { secret: string };
+
+// createWebhookEndpoint's idempotency key follows the same "minted at form
+// render, carried as a hidden field" pattern as createPaymentIntent — see
+// its comment above.
+export async function createWebhookEndpoint(
+  merchantId: string,
+  idempotencyKey: string,
+  url: string,
+): Promise<WebhookEndpointWithSecret> {
+  return callCore<WebhookEndpointWithSecret>(
+    merchantId,
+    "POST",
+    "/v1/webhook_endpoints",
+    { url },
+    { "Idempotency-Key": idempotencyKey },
+  );
+}
 
 export async function listWebhookEndpoints(
   merchantId: string,

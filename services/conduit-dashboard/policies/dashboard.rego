@@ -12,7 +12,7 @@ import rego.v1
 # though the mechanism (a real OPA server, not a hand-rolled if/else) is
 # identical.
 #
-# input shape: {"role": "owner" | "developer" | "read-only", "action": "view" | "refund" | "invite_user"}
+# input shape: {"role": "owner" | "developer" | "read-only", "action": "view" | "refund" | "invite_user" | "create_payment" | "manage_webhooks"}
 
 valid_roles := {"owner", "developer", "read-only"}
 
@@ -32,6 +32,19 @@ allow if {
 allow if {
 	input.role in {"owner", "developer"}
 	input.action == "refund"
+}
+
+# Creating and confirming a payment intent, and registering a webhook
+# endpoint, are both mutating, money-adjacent actions — same tier as
+# refund, same rule: owner and developer can, read-only cannot.
+allow if {
+	input.role in {"owner", "developer"}
+	input.action == "create_payment"
+}
+
+allow if {
+	input.role in {"owner", "developer"}
+	input.action == "manage_webhooks"
 }
 
 # Inviting a new dashboard user (and choosing their role) is an
