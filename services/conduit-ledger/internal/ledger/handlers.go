@@ -139,7 +139,7 @@ func (h *Handlers) getBalance(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{
 		"account_id": accountID.String(),
-		"balance":    balance.String(),
+		"balance":    balance.StringFixed(2),
 	})
 }
 

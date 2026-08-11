@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -55,4 +56,26 @@ type EntryInput struct {
 	AccountID uuid.UUID       `json:"account_id"`
 	Amount    decimal.Decimal `json:"amount"`
 	Direction Direction       `json:"direction"`
+}
+
+// MarshalJSON renders Amount with exactly 2 decimal places — see the
+// identical note on conduit-core's PaymentIntent.MarshalJSON for why
+// decimal.Decimal's default String() isn't used directly here.
+func (e Entry) MarshalJSON() ([]byte, error) {
+	type alias struct {
+		ID            uuid.UUID `json:"id"`
+		TransactionID uuid.UUID `json:"transaction_id"`
+		AccountID     uuid.UUID `json:"account_id"`
+		Amount        string    `json:"amount"`
+		Direction     Direction `json:"direction"`
+		CreatedAt     time.Time `json:"created_at"`
+	}
+	return json.Marshal(alias{
+		ID:            e.ID,
+		TransactionID: e.TransactionID,
+		AccountID:     e.AccountID,
+		Amount:        e.Amount.StringFixed(2),
+		Direction:     e.Direction,
+		CreatedAt:     e.CreatedAt,
+	})
 }
