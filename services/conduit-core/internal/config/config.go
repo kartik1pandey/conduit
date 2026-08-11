@@ -19,21 +19,25 @@ type Config struct {
 	WebhooksBaseURL     string
 	RiskBaseURL         string
 	RiskCallTimeout     time.Duration
+	BillingBaseURL      string
+	BillingCallTimeout  time.Duration
 	IdempotencyCacheTTL time.Duration
 	RateLimitPerMinute  int
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		DatabaseURL:       os.Getenv("CORE_DATABASE_URL"),
-		RedisURL:          os.Getenv("REDIS_URL"),
-		InternalJWTSecret: os.Getenv("INTERNAL_JWT_SECRET"),
-		Port:              os.Getenv("CONDUIT_CORE_PORT"),
-		LedgerBaseURL:     os.Getenv("CONDUIT_LEDGER_URL"),
-		LedgerCallTimeout: 5 * time.Second,
-		WebhooksBaseURL:   os.Getenv("CONDUIT_WEBHOOKS_URL"),
-		RiskBaseURL:       os.Getenv("CONDUIT_RISK_URL"),
-		RiskCallTimeout:   5 * time.Second,
+		DatabaseURL:        os.Getenv("CORE_DATABASE_URL"),
+		RedisURL:           os.Getenv("REDIS_URL"),
+		InternalJWTSecret:  os.Getenv("INTERNAL_JWT_SECRET"),
+		Port:               os.Getenv("CONDUIT_CORE_PORT"),
+		LedgerBaseURL:      os.Getenv("CONDUIT_LEDGER_URL"),
+		LedgerCallTimeout:  5 * time.Second,
+		WebhooksBaseURL:    os.Getenv("CONDUIT_WEBHOOKS_URL"),
+		RiskBaseURL:        os.Getenv("CONDUIT_RISK_URL"),
+		RiskCallTimeout:    5 * time.Second,
+		BillingBaseURL:     os.Getenv("CONDUIT_BILLING_URL"),
+		BillingCallTimeout: 5 * time.Second,
 	}
 	if cfg.Port == "" {
 		cfg.Port = "8000"
@@ -55,6 +59,9 @@ func Load() (Config, error) {
 	}
 	if cfg.RiskBaseURL == "" {
 		return Config{}, fmt.Errorf("CONDUIT_RISK_URL is required")
+	}
+	if cfg.BillingBaseURL == "" {
+		return Config{}, fmt.Errorf("CONDUIT_BILLING_URL is required")
 	}
 
 	ttlHours := os.Getenv("IDEMPOTENCY_KEY_TTL_HOURS")
