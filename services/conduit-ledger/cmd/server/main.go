@@ -72,8 +72,9 @@ func healthHandler(store *ledger.Store) http.HandlerFunc {
 		defer cancel()
 
 		if err := store.Ping(ctx); err != nil {
+			log.Printf("health check: database unreachable: %v", err)
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_ = json.NewEncoder(w).Encode(map[string]string{"status": "unavailable", "error": err.Error()})
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "unavailable"})
 			return
 		}
 		w.WriteHeader(http.StatusOK)
