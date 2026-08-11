@@ -9,7 +9,8 @@ from app.config import load_settings
 from app.db import migrate, new_pool
 from app.model import RiskModel
 from app.policy import OPAClient, PolicyError
-from app.schemas import ScoreRequest, ScoreResponse
+from app.repository import list_events
+from app.schemas import RiskDecision, ScoreRequest, ScoreResponse
 from app.scorer import Scorer
 
 
@@ -63,6 +64,27 @@ def create_app() -> FastAPI:
             stage=result.stage,
             reasons=result.reasons,
         )
+
+    @app.get("/v1/risk_decisions", response_model=list[RiskDecision])
+    def risk_decisions(
+        merchant_id: UUID = Depends(require_internal_auth), limit: int = 50
+    ) -> list[RiskDecision]:
+        limit = max(1, min(limit, 200))
+        events = list_events(pool, merchant_id, limit)
+        return [
+            RiskDecision(
+                id=e.id,
+                payment_intent_id=e.payment_intent_id,
+                amount=e.amount,
+                currency=e.currency,
+                decision=e.decision,
+                risk_score=e.risk_score,
+                stage=e.stage,
+                reasons=e.reasons,
+                created_at=e.created_at,
+            )
+            for e in events
+        ]
 
     return app
 

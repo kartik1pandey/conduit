@@ -39,6 +39,12 @@ func (c *Client) CreateEndpoint(ctx context.Context, merchantID uuid.UUID, url s
 	return endpoint, err
 }
 
+func (c *Client) ListEndpoints(ctx context.Context, merchantID uuid.UUID) ([]Endpoint, error) {
+	var endpoints []Endpoint
+	err := c.do(ctx, merchantID, http.MethodGet, "/v1/webhook_endpoints", nil, &endpoints)
+	return endpoints, err
+}
+
 type Delivery struct {
 	ID                 uuid.UUID `json:"id"`
 	Status             string    `json:"status"`

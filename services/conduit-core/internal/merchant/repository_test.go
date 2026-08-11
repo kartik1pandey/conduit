@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/db"
@@ -66,4 +67,23 @@ func TestSecretKeysAreUniquePerMerchant(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotEqual(t, keyA, keyB)
+}
+
+func TestGet(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+
+	created, _, err := store.Create(ctx, "Acme Corp")
+	require.NoError(t, err)
+
+	fetched, err := store.Get(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, created, fetched)
+}
+
+func TestGetUnknownIDFails(t *testing.T) {
+	store := setupStore(t)
+
+	_, err := store.Get(context.Background(), uuid.New())
+	require.ErrorIs(t, err, ErrNotFound)
 }

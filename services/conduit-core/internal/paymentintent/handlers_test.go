@@ -3,6 +3,7 @@ package paymentintent
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -251,6 +252,150 @@ func TestPaymentIntentLifecycle(t *testing.T) {
 		require.Equal(t, StatusSucceeded, confirmed.Status)
 		require.Equal(t, int32(1), atomic.LoadInt32(&env.transactionCalls), "a terminal payment intent must not trigger another ledger call")
 	})
+
+	t.Run("refund reverses a succeeded charge exactly once", func(t *testing.T) {
+		resp := post("/v1/payment_intents/"+pi.ID.String()+"/refund", "refund-1", `{}`)
+		defer resp.Body.Close()
+		var refunded PaymentIntent
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&refunded))
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.Equal(t, StatusRefunded, refunded.Status)
+		require.Equal(t, int32(2), atomic.LoadInt32(&env.transactionCalls), "refund must post its own reversing ledger transaction")
+		require.Eventually(t, func() bool { return atomic.LoadInt32(&env.eventCalls) == 2 }, time.Second, 10*time.Millisecond,
+			"a payment.refunded event should have been emitted")
+
+		t.Run("re-refunding an already-refunded intent is a no-op, not a second reversal", func(t *testing.T) {
+			resp := post("/v1/payment_intents/"+pi.ID.String()+"/refund", "refund-2-different-key", `{}`)
+			defer resp.Body.Close()
+			var again PaymentIntent
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&again))
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			require.Equal(t, StatusRefunded, again.Status)
+			require.Equal(t, int32(2), atomic.LoadInt32(&env.transactionCalls), "a terminal payment intent must not trigger another ledger call")
+		})
+	})
+}
+
+// TestList covers conduit-dashboard's transactions view: newest-first,
+// scoped to the authenticated merchant, and limit-respecting.
+func TestList(t *testing.T) {
+	env := newTestEnv(t)
+	client := env.server.Client()
+
+	post := func(idemKey, body string) *http.Response {
+		req, err := http.NewRequest(http.MethodPost, env.server.URL+"/v1/payment_intents", strings.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer "+env.secretKey)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", idemKey)
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		return resp
+	}
+
+	var created []PaymentIntent
+	for i := 0; i < 3; i++ {
+		resp := post("list-create-"+string(rune('a'+i)), `{"amount":"5.00","currency":"usd"}`)
+		var pi PaymentIntent
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&pi))
+		resp.Body.Close()
+		created = append(created, pi)
+	}
+
+	get := func(path string) *http.Response {
+		req, err := http.NewRequest(http.MethodGet, env.server.URL+path, nil)
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer "+env.secretKey)
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		return resp
+	}
+
+	t.Run("lists newest first", func(t *testing.T) {
+		resp := get("/v1/payment_intents")
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var listed []PaymentIntent
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&listed))
+		require.Len(t, listed, 3)
+		require.Equal(t, created[2].ID, listed[0].ID, "most recently created must come first")
+		require.Equal(t, created[0].ID, listed[2].ID)
+	})
+
+	t.Run("limit is respected", func(t *testing.T) {
+		resp := get("/v1/payment_intents?limit=1")
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var listed []PaymentIntent
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&listed))
+		require.Len(t, listed, 1)
+		require.Equal(t, created[2].ID, listed[0].ID)
+	})
+
+	t.Run("a different merchant sees none of these", func(t *testing.T) {
+		otherSecretKey := "sk_test_other_merchant"
+		req, err := http.NewRequest(http.MethodGet, env.server.URL+"/v1/payment_intents", nil)
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer "+otherSecretKey)
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusUnauthorized, resp.StatusCode, "an unrecognized key must be rejected, not scoped to an empty list")
+	})
+}
+
+// TestList_EmptyResultIsAnEmptyArrayNotNull guards a real bug: a nil Go
+// slice marshals to the JSON literal `null`, not `[]`. A client typed
+// against "always an array" (conduit-dashboard's coreClient.ts included)
+// breaks the moment a merchant with zero payment intents hits this
+// endpoint, unless List initializes its slice non-nil even with no rows.
+func TestList_EmptyResultIsAnEmptyArrayNotNull(t *testing.T) {
+	env := newTestEnv(t)
+
+	req, err := http.NewRequest(http.MethodGet, env.server.URL+"/v1/payment_intents", nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+env.secretKey)
+	resp, err := env.server.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.JSONEq(t, "[]", string(body))
+}
+
+// TestRefund_RejectsNonSucceededPaymentIntent covers the other half of
+// refund's state machine: there's no charge on the ledger to reverse for a
+// payment intent that never succeeded.
+func TestRefund_RejectsNonSucceededPaymentIntent(t *testing.T) {
+	env := newTestEnv(t)
+	client := env.server.Client()
+
+	post := func(path, idemKey, body string) *http.Response {
+		req, err := http.NewRequest(http.MethodPost, env.server.URL+path, strings.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer "+env.secretKey)
+		req.Header.Set("Content-Type", "application/json")
+		if idemKey != "" {
+			req.Header.Set("Idempotency-Key", idemKey)
+		}
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		return resp
+	}
+
+	resp := post("/v1/payment_intents", "unrefunded-create-1", `{"amount":"10.00","currency":"usd"}`)
+	var pi PaymentIntent
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&pi))
+	resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	require.Equal(t, StatusCreated, pi.Status)
+
+	refundResp := post("/v1/payment_intents/"+pi.ID.String()+"/refund", "unrefunded-refund-1", `{}`)
+	defer refundResp.Body.Close()
+	require.Equal(t, http.StatusConflict, refundResp.StatusCode)
+	require.Equal(t, int32(0), atomic.LoadInt32(&env.transactionCalls), "a never-charged payment intent must never reach the ledger")
 }
 
 // TestConfirm_RiskDeclineBlocksChargeWithNoLedgerEntry is Checkpoint 3.2's

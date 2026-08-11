@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -33,9 +34,60 @@ func NewHandlers(store *Store, ledger *ledgerclient.Client, risk *riskclient.Cli
 // Idempotency-Key; POST routes are wrapped in requireIdempotency, since
 // every write endpoint requires one (CLAUDE.md non-negotiables).
 func (h *Handlers) Register(mux *http.ServeMux, requireIdempotency func(http.Handler) http.Handler) {
+	mux.HandleFunc("GET /v1/payment_intents", h.list)
 	mux.HandleFunc("GET /v1/payment_intents/{id}", h.get)
 	mux.Handle("POST /v1/payment_intents", requireIdempotency(http.HandlerFunc(h.create)))
 	mux.Handle("POST /v1/payment_intents/{id}/confirm", requireIdempotency(http.HandlerFunc(h.confirm)))
+	mux.Handle("POST /v1/payment_intents/{id}/refund", requireIdempotency(http.HandlerFunc(h.refund)))
+}
+
+const (
+	defaultListLimit = 50
+	maxListLimit     = 200
+)
+
+// list backs conduit-dashboard's transactions view. limit/offset are plain
+// query params rather than an opaque cursor — this project's data volume
+// (test-mode traffic from a handful of demo merchants) doesn't need
+// cursor-based pagination's extra complexity to stay correct under
+// concurrent writes the way, say, a real production Stripe-scale endpoint
+// would.
+func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
+	merchantID, ok := authn.MerchantIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing merchant context")
+		return
+	}
+
+	limit := defaultListLimit
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			writeError(w, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		limit = n
+	}
+	if limit > maxListLimit {
+		limit = maxListLimit
+	}
+
+	offset := 0
+	if v := r.URL.Query().Get("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, "offset must be a non-negative integer")
+			return
+		}
+		offset = n
+	}
+
+	intents, err := h.store.List(r.Context(), merchantID, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not list payment intents")
+		return
+	}
+	writeJSON(w, http.StatusOK, intents)
 }
 
 type createRequest struct {
@@ -186,6 +238,71 @@ func (h *Handlers) confirm(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, pi)
 }
 
+// refund drives succeeded -> refunded. An already-refunded payment intent is
+// returned as-is (200) rather than reprocessed — note this is deliberately
+// narrower than Status.IsTerminal(), which also treats a merely-succeeded
+// intent as terminal (correct for confirm, which must never reprocess a
+// successful charge; wrong for refund, whose entire job is to act on a
+// succeeded intent). The refund idempotency key ("core:refund:"+id) on the
+// ledger call is what actually makes a retried refund request safe; this
+// early-return check just avoids a wasted ledger round trip on the common
+// case of a client retrying a request that already refunded. Only a payment
+// in StatusSucceeded can be refunded — never StatusCreated or StatusPending
+// (there is no charge on the ledger yet to reverse) and never StatusFailed
+// (there was never a charge at all, per Checkpoint 3.2).
+func (h *Handlers) refund(w http.ResponseWriter, r *http.Request) {
+	merchantID, ok := authn.MerchantIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing merchant context")
+		return
+	}
+
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid payment intent id")
+		return
+	}
+
+	pi, err := h.store.Get(r.Context(), merchantID, id)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		writeError(w, http.StatusNotFound, "payment intent not found")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "could not fetch payment intent")
+		return
+	}
+
+	if pi.Status == StatusRefunded {
+		writeJSON(w, http.StatusOK, pi)
+		return
+	}
+
+	if pi.Status != StatusSucceeded {
+		writeError(w, http.StatusConflict, "only a succeeded payment intent can be refunded")
+		return
+	}
+
+	if err := h.postRefundToLedger(r.Context(), merchantID, pi); err != nil {
+		// Same treatment as confirm's ledger call: a transient failure here
+		// isn't a decision, it's a dependency hiccup. The payment intent
+		// stays succeeded so a retry (same Idempotency-Key, or a fresh one)
+		// can safely try the refund again.
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("could not post refund to ledger: %v", err))
+		return
+	}
+
+	pi, err = h.store.TransitionStatus(r.Context(), merchantID, id, StatusSucceeded, StatusRefunded)
+	if err != nil {
+		writeError(w, http.StatusConflict, "payment intent status changed concurrently, retry")
+		return
+	}
+
+	h.emitPaymentRefunded(r.Context(), merchantID, pi)
+
+	writeJSON(w, http.StatusOK, pi)
+}
+
 func (h *Handlers) emitPaymentSucceeded(ctx context.Context, merchantID uuid.UUID, pi PaymentIntent) {
 	idempotencyKey := "confirm:" + pi.ID.String() + ":succeeded"
 	data := map[string]any{
@@ -213,6 +330,19 @@ func (h *Handlers) emitPaymentFailed(ctx context.Context, merchantID uuid.UUID, 
 	}
 }
 
+func (h *Handlers) emitPaymentRefunded(ctx context.Context, merchantID uuid.UUID, pi PaymentIntent) {
+	idempotencyKey := "refund:" + pi.ID.String() + ":refunded"
+	data := map[string]any{
+		"payment_intent_id": pi.ID,
+		"amount":            pi.Amount.StringFixed(2),
+		"currency":          pi.Currency,
+		"status":            pi.Status,
+	}
+	if err := h.webhooks.Emit(ctx, merchantID, "payment.refunded", idempotencyKey, data); err != nil {
+		log.Printf("paymentintent: could not emit payment.refunded for %s: %v", pi.ID, err)
+	}
+}
+
 func (h *Handlers) postToLedger(ctx context.Context, merchantID uuid.UUID, pi PaymentIntent) error {
 	cash, err := h.ledger.EnsureAccount(ctx, merchantID, "cash", "asset", pi.Currency)
 	if err != nil {
@@ -227,6 +357,31 @@ func (h *Handlers) postToLedger(ctx context.Context, merchantID uuid.UUID, pi Pa
 	_, err = h.ledger.PostTransaction(ctx, merchantID, idempotencyKey, "payment_intent "+pi.ID.String()+" confirmed", []ledgerclient.Entry{
 		{AccountID: cash.ID, Amount: pi.Amount, Direction: "debit"},
 		{AccountID: revenue.ID, Amount: pi.Amount, Direction: "credit"},
+	})
+	return err
+}
+
+// postRefundToLedger posts a second, independent balanced transaction with
+// entries reversed relative to the original charge — never mutates or
+// deletes the original posting. Ledger entries are append-only
+// (docs/ARCHITECTURE.md), so "reversing a charge" means recording a new
+// transaction that offsets it, exactly how real double-entry bookkeeping
+// handles a reversal; the running balance nets to the correct post-refund
+// amount without ever rewriting history.
+func (h *Handlers) postRefundToLedger(ctx context.Context, merchantID uuid.UUID, pi PaymentIntent) error {
+	cash, err := h.ledger.EnsureAccount(ctx, merchantID, "cash", "asset", pi.Currency)
+	if err != nil {
+		return fmt.Errorf("ensuring cash account: %w", err)
+	}
+	revenue, err := h.ledger.EnsureAccount(ctx, merchantID, "payments_revenue", "revenue", pi.Currency)
+	if err != nil {
+		return fmt.Errorf("ensuring revenue account: %w", err)
+	}
+
+	idempotencyKey := "core:refund:" + pi.ID.String()
+	_, err = h.ledger.PostTransaction(ctx, merchantID, idempotencyKey, "payment_intent "+pi.ID.String()+" refunded", []ledgerclient.Entry{
+		{AccountID: revenue.ID, Amount: pi.Amount, Direction: "debit"},
+		{AccountID: cash.ID, Amount: pi.Amount, Direction: "credit"},
 	})
 	return err
 }

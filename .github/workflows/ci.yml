@@ -88,6 +88,7 @@ jobs:
           export CONDUIT_RISK_URL="http://localhost:8001"
           export CONDUIT_WEBHOOKS_URL="http://localhost:8003"
           export CONDUIT_BILLING_URL="http://localhost:8004"
+          export DASHBOARD_SESSION_SECRET="ci-test-dashboard-secret-not-real"
           if [ -d cmd/migrate ]; then go run ./cmd/migrate; fi
           # -p 1: every package's integration tests share one Postgres
           # database (conduit_test) and one Redis instance. `go test ./...`
@@ -150,8 +151,30 @@ jobs:
           python -m pytest tests/ -v
           docker stop opa-ci
 
+  # A real Postgres service container, plus a real OPA server evaluating
+  # policies/dashboard.rego — same "real OPA, started via docker run since
+  # services: containers can't bind-mount the checked-out policies/
+  # directory" pattern test-risk-service uses for conduit-risk's OPA.
+  # CONDUIT_CORE_URL is deliberately left unset here: coreClient.ts's own
+  # tests skip cleanly without it (they need the full running stack, which
+  # this job doesn't spin up — that level of integration is covered by
+  # npm run test:e2e against a real `docker compose up`, run locally/
+  # manually rather than on every CI push).
   test-dashboard:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: conduit
+          POSTGRES_PASSWORD: conduit
+          POSTGRES_DB: conduit_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U conduit"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - name: Check for package.json
@@ -168,9 +191,30 @@ jobs:
           node-version: "20"
           cache: npm
           cache-dependency-path: services/conduit-dashboard/package-lock.json
-      - name: npm test
+      - name: opa test (native, no server)
         if: steps.check.outputs.exists == 'true'
         working-directory: services/conduit-dashboard
         run: |
+          docker run --rm -v "$PWD/policies:/policies:ro" openpolicyagent/opa:1.19.0 test /policies
+      - name: npm test + build
+        if: steps.check.outputs.exists == 'true'
+        working-directory: services/conduit-dashboard
+        run: |
+          docker run -d --rm --name opa-dashboard-ci -p 8283:8181 \
+            -v "$PWD/policies:/policies:ro" \
+            openpolicyagent/opa:1.19.0 run --server --addr :8181 /policies
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:8283/health && break
+            sleep 0.5
+          done
           npm ci
+          export DASHBOARD_DATABASE_URL="postgres://conduit:conduit@localhost:5432/conduit_test"
+          export DASHBOARD_OPA_URL="http://localhost:8283"
+          npm run migrate
           npm test
+          export AUTH_SECRET="ci-test-auth-secret-not-real"
+          export AUTH_GITHUB_ID="ci-placeholder"
+          export AUTH_GITHUB_SECRET="ci-placeholder"
+          export CONDUIT_CORE_URL="http://ci-placeholder:8000"
+          npm run build
+          docker stop opa-dashboard-ci

@@ -88,6 +88,15 @@ func TestWebhookEndpointsAndEventsEndToEnd(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&endpoint))
 	require.Contains(t, endpoint.Secret, "whsec_")
 
+	// List endpoints — should show the one just registered.
+	listEndpointsResp := doJSON(http.MethodGet, "/v1/webhook_endpoints", "")
+	defer listEndpointsResp.Body.Close()
+	require.Equal(t, http.StatusOK, listEndpointsResp.StatusCode)
+	var endpoints []Endpoint
+	require.NoError(t, json.NewDecoder(listEndpointsResp.Body).Decode(&endpoints))
+	require.Len(t, endpoints, 1)
+	require.Equal(t, endpoint.ID, endpoints[0].ID)
+
 	// Emit an event — the (unreachable) example.com endpoint means the first
 	// delivery attempt will fail, but the event and delivery rows must still
 	// exist immediately, which is what this test actually checks.
