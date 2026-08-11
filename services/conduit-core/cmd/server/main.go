@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/authn"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/config"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/db"
@@ -17,6 +19,9 @@ import (
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/ledgerclient"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/merchant"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/paymentintent"
+	"github.com/kartik1pandey/conduit/services/conduit-core/internal/ratelimit"
+	"github.com/kartik1pandey/conduit/services/conduit-core/internal/webhookendpoint"
+	"github.com/kartik1pandey/conduit/services/conduit-core/internal/webhooksclient"
 	"github.com/kartik1pandey/conduit/services/conduit-core/migrations"
 )
 
@@ -39,23 +44,40 @@ func main() {
 		log.Fatalf("running migrations: %v", err)
 	}
 
+	redisOpts, err := redis.ParseURL(cfg.RedisURL)
+	if err != nil {
+		log.Fatalf("parsing REDIS_URL: %v", err)
+	}
+	redisClient := redis.NewClient(redisOpts)
+	defer redisClient.Close()
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		log.Fatalf("connecting to redis: %v", err)
+	}
+
 	merchantStore := merchant.NewStore(pool)
 	merchantHandlers := merchant.NewHandlers(merchantStore)
 
-	idemStore := idempotency.NewStore(pool)
+	idemStore := idempotency.NewStore(pool, redisClient, cfg.IdempotencyCacheTTL)
 	requireIdempotency := idempotency.RequireKey(idemStore)
 
+	limiter := ratelimit.New(redisClient, cfg.RateLimitPerMinute)
+	requireWithinLimit := ratelimit.RequireWithinLimit(limiter)
+
 	ledgerClient := ledgerclient.New(cfg.LedgerBaseURL, cfg.InternalJWTSecret, cfg.LedgerCallTimeout)
+	webhooksClient := webhooksclient.New(cfg.WebhooksBaseURL, cfg.InternalJWTSecret, cfg.LedgerCallTimeout)
+
 	piStore := paymentintent.NewStore(pool)
-	piHandlers := paymentintent.NewHandlers(piStore, ledgerClient)
+	piHandlers := paymentintent.NewHandlers(piStore, ledgerClient, webhooksClient)
+	webhookEndpointHandlers := webhookendpoint.NewHandlers(webhooksClient)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", healthHandler(pool))
+	mux.HandleFunc("GET /health", healthHandler(pool, redisClient))
 	merchantHandlers.RegisterUnauthenticated(mux) // no API key exists yet for a merchant that doesn't exist yet
 
 	protected := http.NewServeMux()
 	piHandlers.Register(protected, requireIdempotency)
-	mux.Handle("/", authn.RequireAPIKey(merchantStore)(protected))
+	webhookEndpointHandlers.Register(protected, requireIdempotency)
+	mux.Handle("/", authn.RequireAPIKey(merchantStore)(requireWithinLimit(protected)))
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
@@ -77,13 +99,19 @@ func main() {
 	}
 }
 
-func healthHandler(pool interface{ Ping(context.Context) error }) http.HandlerFunc {
+func healthHandler(pool interface{ Ping(context.Context) error }, redisClient *redis.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 
 		if err := pool.Ping(ctx); err != nil {
 			log.Printf("health check: database unreachable: %v", err)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "unavailable"})
+			return
+		}
+		if err := redisClient.Ping(ctx).Err(); err != nil {
+			log.Printf("health check: redis unreachable: %v", err)
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "unavailable"})
 			return

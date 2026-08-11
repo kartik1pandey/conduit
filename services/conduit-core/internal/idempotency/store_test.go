@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/db"
@@ -21,6 +22,10 @@ func setupStore(t *testing.T) (*Store, *pgxpool.Pool, uuid.UUID) {
 	if dbURL == "" {
 		t.Skip("CORE_DATABASE_URL not set; skipping integration test")
 	}
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		t.Skip("REDIS_URL not set; skipping integration test")
+	}
 
 	ctx := context.Background()
 	pool, err := db.NewPool(ctx, dbURL)
@@ -31,10 +36,15 @@ func setupStore(t *testing.T) (*Store, *pgxpool.Pool, uuid.UUID) {
 	_, err = pool.Exec(ctx, "TRUNCATE idempotency_keys, payment_intents, merchants CASCADE")
 	require.NoError(t, err)
 
+	redisOpts, err := redis.ParseURL(redisURL)
+	require.NoError(t, err)
+	redisClient := redis.NewClient(redisOpts)
+	t.Cleanup(func() { redisClient.Close() })
+
 	m, _, err := merchant.NewStore(pool).Create(ctx, "Test Merchant")
 	require.NoError(t, err)
 
-	return NewStore(pool), pool, m.ID
+	return NewStore(pool, redisClient, time.Hour), pool, m.ID
 }
 
 func TestClaimAndFill_FreshKeyThenReplay(t *testing.T) {
@@ -80,6 +90,39 @@ func TestClaim_InFlightKeyBlocksConcurrentRetry(t *testing.T) {
 
 	_, _, err = store.Claim(ctx, merchantID, "key-1", "hash-a")
 	require.ErrorIs(t, err, ErrInFlight)
+}
+
+func TestClaim_ReplayIsServedFromCache(t *testing.T) {
+	store, _, merchantID := setupStore(t)
+	ctx := context.Background()
+
+	claimed, _, err := store.Claim(ctx, merchantID, "key-1", "hash-a")
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.NoError(t, store.Fill(ctx, merchantID, "key-1", 201, []byte(`{"id":"abc"}`)))
+
+	require.EqualValues(t, 0, store.CacheHitCount(), "no replay has happened yet")
+
+	claimed, existing, err := store.Claim(ctx, merchantID, "key-1", "hash-a")
+	require.NoError(t, err)
+	require.False(t, claimed)
+	require.NotNil(t, existing)
+	require.EqualValues(t, 1, store.CacheHitCount(), "the replay should have been served from Redis, not Postgres")
+}
+
+func TestFill_SetsRedisTTL(t *testing.T) {
+	store, _, merchantID := setupStore(t)
+	ctx := context.Background()
+
+	claimed, _, err := store.Claim(ctx, merchantID, "key-1", "hash-a")
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.NoError(t, store.Fill(ctx, merchantID, "key-1", 200, []byte(`{}`)))
+
+	ttl, err := store.cache.client.TTL(ctx, cacheKey(merchantID, "key-1")).Result()
+	require.NoError(t, err)
+	require.Greater(t, ttl, time.Duration(0), "a cached idempotency key must have an expiry set")
+	require.LessOrEqual(t, ttl, time.Hour)
 }
 
 func TestClaim_StaleInFlightKeyIsReclaimed(t *testing.T) {

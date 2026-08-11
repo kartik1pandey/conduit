@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 
@@ -25,6 +26,10 @@ func setupStore(t *testing.T) *Store {
 	if dbURL == "" {
 		t.Skip("LEDGER_DATABASE_URL not set; skipping integration test")
 	}
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		t.Skip("REDIS_URL not set; skipping integration test")
+	}
 
 	ctx := context.Background()
 	pool, err := db.NewPool(ctx, dbURL)
@@ -35,7 +40,13 @@ func setupStore(t *testing.T) *Store {
 	_, err = pool.Exec(ctx, "TRUNCATE ledger_entries, transactions, accounts")
 	require.NoError(t, err)
 
-	return NewStore(pool)
+	redisOpts, err := redis.ParseURL(redisURL)
+	require.NoError(t, err)
+	redisClient := redis.NewClient(redisOpts)
+	t.Cleanup(func() { redisClient.Close() })
+	require.NoError(t, redisClient.FlushDB(ctx).Err())
+
+	return NewStore(pool, redisClient)
 }
 
 func TestPostTransaction_Balanced(t *testing.T) {

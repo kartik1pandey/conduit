@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/kartik1pandey/conduit/services/conduit-ledger/internal/authn"
 	"github.com/kartik1pandey/conduit/services/conduit-ledger/internal/config"
 	"github.com/kartik1pandey/conduit/services/conduit-ledger/internal/db"
@@ -36,11 +38,21 @@ func main() {
 		log.Fatalf("running migrations: %v", err)
 	}
 
-	store := ledger.NewStore(pool)
+	redisOpts, err := redis.ParseURL(cfg.RedisURL)
+	if err != nil {
+		log.Fatalf("parsing REDIS_URL: %v", err)
+	}
+	redisClient := redis.NewClient(redisOpts)
+	defer redisClient.Close()
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		log.Fatalf("connecting to redis: %v", err)
+	}
+
+	store := ledger.NewStore(pool, redisClient)
 	handlers := ledger.NewHandlers(store)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", healthHandler(store))
+	mux.HandleFunc("GET /health", healthHandler(store, redisClient))
 
 	protected := http.NewServeMux()
 	handlers.Register(protected)
@@ -66,13 +78,19 @@ func main() {
 	}
 }
 
-func healthHandler(store *ledger.Store) http.HandlerFunc {
+func healthHandler(store *ledger.Store, redisClient *redis.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 
 		if err := store.Ping(ctx); err != nil {
 			log.Printf("health check: database unreachable: %v", err)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "unavailable"})
+			return
+		}
+		if err := redisClient.Ping(ctx).Err(); err != nil {
+			log.Printf("health check: redis unreachable: %v", err)
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "unavailable"})
 			return

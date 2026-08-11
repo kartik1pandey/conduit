@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/authn"
@@ -19,6 +20,7 @@ import (
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/idempotency"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/ledgerclient"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/merchant"
+	"github.com/kartik1pandey/conduit/services/conduit-core/internal/webhooksclient"
 	"github.com/kartik1pandey/conduit/services/conduit-core/migrations"
 )
 
@@ -61,10 +63,27 @@ func (s staticAuthenticator) AuthenticateBySecretKey(_ context.Context, secretKe
 	return s.merchantID, nil
 }
 
+// fakeWebhooks stands in for conduit-webhooks so confirm's best-effort event
+// emission can be verified without a real webhooks service running.
+func fakeWebhooks(t *testing.T, eventCalls *int32) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/events", func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(eventCalls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": uuid.New()})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 type testEnv struct {
 	server           *httptest.Server
 	secretKey        string
 	transactionCalls int32
+	eventCalls       int32
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -72,6 +91,10 @@ func newTestEnv(t *testing.T) *testEnv {
 	dbURL := os.Getenv("CORE_DATABASE_URL")
 	if dbURL == "" {
 		t.Skip("CORE_DATABASE_URL not set; skipping integration test")
+	}
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		t.Skip("REDIS_URL not set; skipping integration test")
 	}
 
 	ctx := context.Background()
@@ -83,15 +106,22 @@ func newTestEnv(t *testing.T) *testEnv {
 	_, err = pool.Exec(ctx, "TRUNCATE idempotency_keys, payment_intents, merchants CASCADE")
 	require.NoError(t, err)
 
+	redisOpts, err := redis.ParseURL(redisURL)
+	require.NoError(t, err)
+	redisClient := redis.NewClient(redisOpts)
+	t.Cleanup(func() { redisClient.Close() })
+
 	m, secretKey, err := merchant.NewStore(pool).Create(ctx, "Test Merchant")
 	require.NoError(t, err)
 
 	env := &testEnv{secretKey: secretKey}
 	ledgerSrv := fakeLedger(t, &env.transactionCalls)
+	webhooksSrv := fakeWebhooks(t, &env.eventCalls)
 
 	ledgerClient := ledgerclient.New(ledgerSrv.URL, testJWTSecret, 5*time.Second)
-	handlers := NewHandlers(NewStore(pool), ledgerClient)
-	requireIdempotency := idempotency.RequireKey(idempotency.NewStore(pool))
+	webhooksClient := webhooksclient.New(webhooksSrv.URL, testJWTSecret, 5*time.Second)
+	handlers := NewHandlers(NewStore(pool), ledgerClient, webhooksClient)
+	requireIdempotency := idempotency.RequireKey(idempotency.NewStore(pool, redisClient, time.Hour))
 
 	protected := http.NewServeMux()
 	handlers.Register(protected, requireIdempotency)
@@ -152,6 +182,8 @@ func TestPaymentIntentLifecycle(t *testing.T) {
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 		require.Equal(t, StatusSucceeded, confirmed.Status)
 		require.Equal(t, int32(1), atomic.LoadInt32(&env.transactionCalls))
+		require.Eventually(t, func() bool { return atomic.LoadInt32(&env.eventCalls) == 1 }, time.Second, 10*time.Millisecond,
+			"a payment.succeeded event should have been emitted")
 	})
 
 	t.Run("re-confirming an already-succeeded intent is a no-op, not a second ledger post", func(t *testing.T) {

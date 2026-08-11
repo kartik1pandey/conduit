@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 )
 
@@ -25,11 +27,12 @@ var ErrUnbalanced = errors.New("transaction entries do not net to zero")
 var ErrNotFound = errors.New("not found")
 
 type Store struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	cache *balanceCache
 }
 
-func NewStore(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+func NewStore(pool *pgxpool.Pool, redisClient *redis.Client) *Store {
+	return &Store{pool: pool, cache: newBalanceCache(redisClient)}
 }
 
 func (s *Store) Ping(ctx context.Context) error {
@@ -102,7 +105,76 @@ func (s *Store) PostTransaction(ctx context.Context, merchantID uuid.UUID, idemp
 		return Transaction{}, fmt.Errorf("committing transaction: %w", err)
 	}
 
+	// Best-effort: the write is already durable in Postgres at this point.
+	// A failure updating the cache just means the next read for these
+	// accounts falls back to a live recompute instead of a fast cache hit —
+	// never a correctness problem, per the cache's own doc comment.
+	if err := s.applyBalanceDeltas(ctx, merchantID, entries); err != nil {
+		log.Printf("ledger: failed to update balance cache for transaction %s: %v", txnID, err)
+	}
+
 	return s.GetTransaction(ctx, merchantID, txnID)
+}
+
+// applyBalanceDeltas updates the cached balance for every account touched by
+// entries, incrementally (Redis INCRBY) rather than by re-summing — see
+// balancecache.go for why that requires knowing each account's type.
+func (s *Store) applyBalanceDeltas(ctx context.Context, merchantID uuid.UUID, entries []EntryInput) error {
+	deltas := make(map[uuid.UUID]int64)
+	accountIDs := make([]uuid.UUID, 0, len(entries))
+	for _, e := range entries {
+		if _, seen := deltas[e.AccountID]; !seen {
+			accountIDs = append(accountIDs, e.AccountID)
+		}
+		deltas[e.AccountID] = 0
+	}
+
+	rows, err := s.pool.Query(ctx, `SELECT id, type FROM accounts WHERE id = ANY($1)`, accountIDs)
+	if err != nil {
+		return fmt.Errorf("querying account types: %w", err)
+	}
+	accountTypes := make(map[uuid.UUID]AccountType)
+	for rows.Next() {
+		var id uuid.UUID
+		var t AccountType
+		if err := rows.Scan(&id, &t); err != nil {
+			rows.Close()
+			return fmt.Errorf("scanning account type: %w", err)
+		}
+		accountTypes[id] = t
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating account types: %w", err)
+	}
+
+	for _, e := range entries {
+		signed := signedMinorUnits(accountTypes[e.AccountID], e.Direction, e.Amount)
+		deltas[e.AccountID] += signed
+	}
+
+	for accountID, delta := range deltas {
+		if delta == 0 {
+			continue
+		}
+		if err := s.cache.incrBy(ctx, merchantID, accountID, delta); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// signedMinorUnits applies the standard double-entry sign convention: debits
+// increase asset/expense accounts and decrease liability/revenue accounts —
+// the same rule Balance() uses when summing live, just applied
+// incrementally here instead of via a fresh SUM().
+func signedMinorUnits(accountType AccountType, direction Direction, amount decimal.Decimal) int64 {
+	units := toMinorUnits(amount)
+	increases := (accountType == AccountAsset || accountType == AccountExpense) == (direction == Debit)
+	if increases {
+		return units
+	}
+	return -units
 }
 
 func (s *Store) GetTransaction(ctx context.Context, merchantID, transactionID uuid.UUID) (Transaction, error) {
@@ -174,7 +246,19 @@ func (s *Store) entriesForTransaction(ctx context.Context, transactionID uuid.UU
 // merchant can never query another's account by guessing an ID. The sign
 // convention follows standard double-entry accounting: debits increase
 // asset/expense accounts and decrease liability/revenue accounts.
+//
+// The cache is checked first; a hit skips the live SUM() entirely. A miss
+// (cold cache, or nothing cached for this account yet) falls back to
+// exactly the live recompute this method always did, then populates the
+// cache so the next read is fast — the recompute is never skipped when the
+// cache doesn't have an answer, only when it does.
 func (s *Store) Balance(ctx context.Context, merchantID, accountID uuid.UUID) (decimal.Decimal, error) {
+	if cached, ok, err := s.cache.get(ctx, merchantID, accountID); err != nil {
+		log.Printf("ledger: balance cache read failed, falling back to live recompute: %v", err)
+	} else if ok {
+		return cached, nil
+	}
+
 	var accountType AccountType
 	err := s.pool.QueryRow(ctx, `
 		SELECT type FROM accounts WHERE id = $1 AND merchant_id = $2
@@ -207,10 +291,16 @@ func (s *Store) Balance(ctx context.Context, merchantID, accountID uuid.UUID) (d
 		return decimal.Zero, fmt.Errorf("parsing credit total: %w", err)
 	}
 
+	var balance decimal.Decimal
 	switch accountType {
 	case AccountAsset, AccountExpense:
-		return debits.Sub(credits), nil
+		balance = debits.Sub(credits)
 	default: // liability, revenue
-		return credits.Sub(debits), nil
+		balance = credits.Sub(debits)
 	}
+
+	if err := s.cache.set(ctx, merchantID, accountID, balance); err != nil {
+		log.Printf("ledger: failed to populate balance cache: %v", err)
+	}
+	return balance, nil
 }

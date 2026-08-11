@@ -9,11 +9,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 )
 
 // ErrKeyReused means the same Idempotency-Key was sent with different
@@ -40,17 +42,39 @@ type Record struct {
 }
 
 type Store struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	cache *redisCache
 }
 
-func NewStore(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+func NewStore(pool *pgxpool.Pool, redisClient *redis.Client, cacheTTL time.Duration) *Store {
+	return &Store{pool: pool, cache: newRedisCache(redisClient, cacheTTL)}
+}
+
+// CacheHitCount is exposed for tests and observability — see redisCache's
+// doc comment.
+func (s *Store) CacheHitCount() int64 {
+	return s.cache.HitCount()
 }
 
 // Claim atomically reserves key for merchantID, or reports why it couldn't:
 // ErrKeyReused, ErrInFlight, or (if the key was already filled) the
 // previously stored Record to replay verbatim.
+//
+// The Redis cache is checked first (docs/ARCHITECTURE.md: "check Redis
+// before Postgres on every write"). A hit resolves the request without
+// touching Postgres at all; a miss falls through to the exact Postgres
+// logic Phase 1 built, unchanged.
 func (s *Store) Claim(ctx context.Context, merchantID uuid.UUID, key, requestHash string) (claimed bool, existing *Record, err error) {
+	cached, err := s.cache.get(ctx, merchantID, key)
+	if err != nil {
+		log.Printf("idempotency: cache read failed, falling back to Postgres: %v", err)
+	} else if cached != nil {
+		if cached.RequestHash != requestHash {
+			return false, nil, ErrKeyReused
+		}
+		return false, cached, nil
+	}
+
 	var claimedID uuid.UUID
 	err = s.pool.QueryRow(ctx, `
 		INSERT INTO idempotency_keys (merchant_id, key, request_hash)
@@ -109,14 +133,20 @@ func (s *Store) reclaimStale(ctx context.Context, merchantID uuid.UUID, key, req
 }
 
 // Fill records the final response against key, so future requests with the
-// same key replay it instead of reprocessing.
+// same key replay it instead of reprocessing. Postgres is written first and
+// is the only write that can fail this call; the cache is then populated
+// best-effort so the *next* replay of this key can skip Postgres entirely.
 func (s *Store) Fill(ctx context.Context, merchantID uuid.UUID, key string, status int, body []byte) error {
-	_, err := s.pool.Exec(ctx, `
+	var requestHash string
+	err := s.pool.QueryRow(ctx, `
 		UPDATE idempotency_keys SET response_status = $3, response_body = $4
 		WHERE merchant_id = $1 AND key = $2
-	`, merchantID, key, status, body)
+		RETURNING request_hash
+	`, merchantID, key, status, body).Scan(&requestHash)
 	if err != nil {
 		return fmt.Errorf("filling idempotency key: %w", err)
 	}
+
+	s.cache.set(ctx, merchantID, key, requestHash, status, body)
 	return nil
 }

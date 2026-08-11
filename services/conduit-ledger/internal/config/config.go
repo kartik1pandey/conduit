@@ -11,6 +11,7 @@ import (
 
 type Config struct {
 	DatabaseURL       string
+	RedisURL          string
 	InternalJWTSecret string
 	Port              string
 }
@@ -18,6 +19,7 @@ type Config struct {
 func Load() (Config, error) {
 	cfg := Config{
 		DatabaseURL:       os.Getenv("LEDGER_DATABASE_URL"),
+		RedisURL:          os.Getenv("REDIS_URL"),
 		InternalJWTSecret: os.Getenv("INTERNAL_JWT_SECRET"),
 		Port:              os.Getenv("CONDUIT_LEDGER_PORT"),
 	}
@@ -26,6 +28,9 @@ func Load() (Config, error) {
 	}
 	if cfg.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("LEDGER_DATABASE_URL is required")
+	}
+	if cfg.RedisURL == "" {
+		return Config{}, fmt.Errorf("REDIS_URL is required")
 	}
 	if cfg.InternalJWTSecret == "" {
 		return Config{}, fmt.Errorf("INTERNAL_JWT_SECRET is required")
