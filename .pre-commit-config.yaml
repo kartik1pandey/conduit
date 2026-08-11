@@ -29,12 +29,24 @@ repos:
       - id: gitleaks
 
   # --- Go services (conduit-core, conduit-ledger, conduit-webhooks, conduit-billing) ---
-  - repo: https://github.com/dnephin/pre-commit-golang
-    rev: v0.5.1
+  # Local, not upstream dnephin/pre-commit-golang: that repo assumes one Go
+  # module at the repo root, but this repo has one module per service, and
+  # its go-fmt script's /dev/fd/5 tee trick doesn't work under Git Bash on
+  # Windows either. scripts/pre-commit/go-{fmt,vet}.sh loop over every
+  # services/*/go.mod instead.
+  - repo: local
     hooks:
       - id: go-fmt
+        name: go fmt
+        entry: bash scripts/pre-commit/go-fmt.sh
+        language: system
+        pass_filenames: false
         files: ^services/(conduit-core|conduit-ledger|conduit-webhooks|conduit-billing)/.*\.go$
       - id: go-vet
+        name: go vet
+        entry: bash scripts/pre-commit/go-vet.sh
+        language: system
+        pass_filenames: false
         files: ^services/(conduit-core|conduit-ledger|conduit-webhooks|conduit-billing)/.*\.go$
 
   # --- Python service (conduit-risk) ---

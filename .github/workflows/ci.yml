@@ -22,8 +22,28 @@ jobs:
   # a manifest file (go.mod / pyproject.toml / package.json) to key off of.
   # This keeps the workflow honest about what's actually tested today instead
   # of hardcoding `go test ./...` against directories that don't build yet.
+  #
+  # A real Postgres runs as a service container so integration tests
+  # actually execute here, not just skip: locally they skip when their
+  # DATABASE_URL env var is unset (see e.g.
+  # conduit-ledger/internal/ledger/repository_test.go), which is correct for
+  # a laptop with no DB running, but would make this job silently useless if
+  # CI didn't provide one.
   test-go-services:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: conduit
+          POSTGRES_PASSWORD: conduit
+          POSTGRES_DB: conduit_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U conduit"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
     strategy:
       matrix:
         service: [conduit-core, conduit-ledger, conduit-webhooks, conduit-billing]
@@ -41,10 +61,20 @@ jobs:
         if: steps.check.outputs.exists == 'true'
         with:
           go-version-file: services/${{ matrix.service }}/go.mod
-      - name: go test
+      - name: Migrate and test
         if: steps.check.outputs.exists == 'true'
         working-directory: services/${{ matrix.service }}
-        run: go test ./... -race -cover
+        run: |
+          case "${{ matrix.service }}" in
+            conduit-core) export CORE_DATABASE_URL="postgres://conduit:conduit@localhost:5432/conduit_test" ;;
+            conduit-ledger) export LEDGER_DATABASE_URL="postgres://conduit:conduit@localhost:5432/conduit_test" ;;
+            conduit-webhooks) export WEBHOOKS_DATABASE_URL="postgres://conduit:conduit@localhost:5432/conduit_test" ;;
+            conduit-billing) export BILLING_DATABASE_URL="postgres://conduit:conduit@localhost:5432/conduit_test" ;;
+          esac
+          export INTERNAL_JWT_SECRET="ci-test-secret-not-real"
+          export CONDUIT_LEDGER_URL="http://localhost:8002"
+          if [ -d cmd/migrate ]; then go run ./cmd/migrate; fi
+          go test ./... -race -cover
 
   test-risk-service:
     runs-on: ubuntu-latest
