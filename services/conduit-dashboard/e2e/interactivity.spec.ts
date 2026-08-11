@@ -115,7 +115,7 @@ test("a read-only session cannot create a payment", async ({ page }) => {
     .getByLabel("Password (optional)")
     .fill("correct-horse-battery-staple");
   await page.getByRole("button", { name: "Invite" }).click();
-  await expect(page.getByText("Invited.")).toBeVisible();
+  await expect(page.getByRole("main").getByText("Invited.")).toBeVisible();
 
   await page.getByRole("button", { name: "Log out" }).click();
   await expect(page).toHaveURL(/\/login$/);
@@ -128,6 +128,8 @@ test("a read-only session cannot create a payment", async ({ page }) => {
   await page.getByLabel("Amount").fill("10.00");
   await page.getByRole("button", { name: "Create payment intent" }).click();
   await expect(
-    page.getByText("403: your role does not permit creating payments."),
+    page
+      .getByRole("main")
+      .getByText("403: your role does not permit creating payments."),
   ).toBeVisible();
 });

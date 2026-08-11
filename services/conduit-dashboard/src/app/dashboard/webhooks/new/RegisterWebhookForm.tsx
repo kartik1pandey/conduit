@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useActionState } from "react";
 import { Button } from "@/components/ui/Button";
+import { useActionToast } from "@/lib/useActionToast";
 import { registerWebhook } from "./actions";
 
 export function RegisterWebhookForm({
@@ -14,15 +15,16 @@ export function RegisterWebhookForm({
     registerWebhook,
     undefined,
   );
+  useActionToast(state, "Endpoint registered.");
 
   if (state && "ok" in state) {
     return (
       <div className="space-y-4">
-        <p className="text-sm text-emerald-600 dark:text-emerald-400">
+        <p className="text-sm text-[var(--success)]">
           Endpoint registered. Save this signing secret now — it won&apos;t be
           shown again.
         </p>
-        <div className="rounded-lg border border-[var(--border)] bg-[var(--background)] p-3">
+        <div className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--background)] p-3">
           <code data-testid="webhook-secret" className="break-all text-xs">
             {state.secret}
           </code>
@@ -52,12 +54,12 @@ export function RegisterWebhookForm({
           type="url"
           placeholder="https://your-app.example.com/webhooks/conduit"
           required
-          className="w-full rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+          className="w-full rounded-[var(--radius-sm)] border border-[var(--border)] bg-transparent px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
         />
       </label>
 
       {state && "error" in state && (
-        <p className="text-sm text-rose-500">{state.error}</p>
+        <p className="text-sm text-[var(--danger)]">{state.error}</p>
       )}
 
       <Button type="submit" disabled={pending} className="w-full">

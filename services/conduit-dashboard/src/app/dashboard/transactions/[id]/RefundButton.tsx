@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 import { Button } from "@/components/ui/Button";
+import { useActionToast } from "@/lib/useActionToast";
 import { refund, type RefundState } from "./actions";
 
 export function RefundButton({ paymentIntentId }: { paymentIntentId: string }) {
@@ -9,13 +10,10 @@ export function RefundButton({ paymentIntentId }: { paymentIntentId: string }) {
     async (prevState) => refund(paymentIntentId, prevState),
     undefined,
   );
+  useActionToast(state, "Refund issued.");
 
   if (state && "ok" in state) {
-    return (
-      <p className="text-sm text-emerald-600 dark:text-emerald-400">
-        Refund issued.
-      </p>
-    );
+    return <p className="text-sm text-[var(--success)]">Refund issued.</p>;
   }
 
   return (
@@ -24,7 +22,7 @@ export function RefundButton({ paymentIntentId }: { paymentIntentId: string }) {
         {pending ? "Refunding…" : "Refund"}
       </Button>
       {state?.error && (
-        <p className="mt-2 text-sm text-rose-500">{state.error}</p>
+        <p className="mt-2 text-sm text-[var(--danger)]">{state.error}</p>
       )}
     </form>
   );

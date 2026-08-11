@@ -66,7 +66,10 @@ test("a read-only session gets 403 on a refund action", async ({ page }) => {
     .getByLabel("Password (optional)")
     .fill("correct-horse-battery-staple");
   await page.getByRole("button", { name: "Invite" }).click();
-  await expect(page.getByText("Invited.")).toBeVisible();
+  // Scoped to <main>, not a bare text match — sonner also toasts the
+  // same "Invited."/"Refund issued." text as a louder secondary signal,
+  // so a page-wide match resolves to two elements.
+  await expect(page.getByRole("main").getByText("Invited.")).toBeVisible();
 
   await page.getByRole("button", { name: "Log out" }).click();
   await expect(page).toHaveURL(/\/login$/);
@@ -80,7 +83,7 @@ test("a read-only session gets 403 on a refund action", async ({ page }) => {
   await page.goto(`/dashboard/transactions/${piId}`);
   await page.getByRole("button", { name: "Refund" }).click();
   await expect(
-    page.getByText("403: your role does not permit refunds."),
+    page.getByRole("main").getByText("403: your role does not permit refunds."),
   ).toBeVisible();
 
   // And the payment intent must still read succeeded, not refunded — the
@@ -109,7 +112,9 @@ test("an owner session can refund a succeeded payment intent", async ({
 
   await page.goto(`/dashboard/transactions/${piId}`);
   await page.getByRole("button", { name: "Refund" }).click();
-  await expect(page.getByText("Refund issued.")).toBeVisible();
+  await expect(
+    page.getByRole("main").getByText("Refund issued."),
+  ).toBeVisible();
 });
 
 // Checkpoint 4.3's other half: a non-owner cannot invite teammates either.
@@ -132,7 +137,7 @@ test("a developer cannot invite a teammate", async ({ page }) => {
     .getByLabel("Password (optional)")
     .fill("correct-horse-battery-staple");
   await page.getByRole("button", { name: "Invite" }).click();
-  await expect(page.getByText("Invited.")).toBeVisible();
+  await expect(page.getByRole("main").getByText("Invited.")).toBeVisible();
 
   await page.getByRole("button", { name: "Log out" }).click();
   await expect(page).toHaveURL(/\/login$/);
