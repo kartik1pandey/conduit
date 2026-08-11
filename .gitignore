@@ -3,8 +3,9 @@
 .env.*
 !.env.example
 
-# --- Interview-prep / learning docs (kept locally, never pushed) ---
-docs/learning/
+# --- Internal planning/spec docs and instructions (kept locally, never pushed) ---
+CLAUDE.md
+docs/
 
 # --- Go ---
 *.exe
@@ -33,6 +34,9 @@ out/
 dist/
 build/
 npm-debug.log*
+
+# --- Claude Code local session/tool state ---
+.claude/
 
 # --- Editor / OS ---
 .vscode/
