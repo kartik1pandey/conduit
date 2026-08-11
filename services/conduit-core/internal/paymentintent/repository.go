@@ -66,6 +66,37 @@ func (s *Store) Get(ctx context.Context, merchantID, id uuid.UUID) (PaymentInten
 	return pi, nil
 }
 
+// List returns a merchant's payment intents newest-first, for
+// conduit-dashboard's transactions view — scoped to merchantID at the query
+// layer, same as every other read in this package (Checkpoint 1.7).
+func (s *Store) List(ctx context.Context, merchantID uuid.UUID, limit, offset int) ([]PaymentIntent, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+selectColumns+`
+		FROM payment_intents
+		WHERE merchant_id = $1
+		ORDER BY created_at DESC
+		LIMIT $2 OFFSET $3
+	`, merchantID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("listing payment intents: %w", err)
+	}
+	defer rows.Close()
+
+	// Initialized non-nil: a nil slice marshals to JSON `null`, not `[]` —
+	// wrong for an API response a client expects to always be an array,
+	// even an empty one (conduit-dashboard's transactions view relies on
+	// this for a merchant with zero payment intents).
+	intents := []PaymentIntent{}
+	for rows.Next() {
+		var pi PaymentIntent
+		if err := rows.Scan(&pi.ID, &pi.MerchantID, scanDecimal(&pi.Amount), &pi.Currency, &pi.Status, &pi.Description, &pi.FailureReason, &pi.CreatedAt, &pi.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scanning payment intent: %w", err)
+		}
+		intents = append(intents, pi)
+	}
+	return intents, rows.Err()
+}
+
 // TransitionStatus moves id from expectedCurrent to next, scoped to
 // merchantID, only if the row's status still matches expectedCurrent at
 // write time.

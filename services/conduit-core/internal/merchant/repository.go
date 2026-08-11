@@ -55,6 +55,25 @@ func (s *Store) Create(ctx context.Context, name string) (Merchant, string, erro
 	return m, secretKey, nil
 }
 
+// Get fetches a merchant by id. Unlike payment_intents/webhook_endpoints,
+// merchants aren't themselves scoped to a merchant_id — this is only ever
+// called with an id that authn.RequireAPIKey or verifySecret has already
+// resolved from a real credential, never a client-supplied id, so there's
+// no cross-tenant lookup risk to guard against here.
+func (s *Store) Get(ctx context.Context, id uuid.UUID) (Merchant, error) {
+	var m Merchant
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, name, publishable_key, created_at FROM merchants WHERE id = $1
+	`, id).Scan(&m.ID, &m.Name, &m.PublishableKey, &m.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Merchant{}, ErrNotFound
+	}
+	if err != nil {
+		return Merchant{}, fmt.Errorf("fetching merchant: %w", err)
+	}
+	return m, nil
+}
+
 // AuthenticateBySecretKey resolves a plaintext secret key to a merchant_id.
 // Implements authn.MerchantAuthenticator.
 func (s *Store) AuthenticateBySecretKey(ctx context.Context, secretKey string) (uuid.UUID, error) {

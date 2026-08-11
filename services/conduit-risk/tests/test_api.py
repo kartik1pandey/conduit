@@ -115,3 +115,42 @@ def test_golden_sample_velocity_limit_is_declined_by_rules_after_repeated_reques
     assert result["decision"] == "decline"
     assert result["stage"] == "rules"
     assert result["reasons"] == ["velocity_limit_exceeded"]
+
+
+# --- /v1/risk_decisions: conduit-dashboard's read view ----------------------
+
+
+def test_risk_decisions_requires_auth(client):
+    resp = client.get("/v1/risk_decisions")
+    assert resp.status_code == 401
+
+
+def test_risk_decisions_lists_this_merchants_history_newest_first(client, sign_internal_jwt):
+    merchant_id = uuid.UUID("a0000000-0000-0000-0000-000000000005")
+    token = sign_internal_jwt(merchant_id)
+
+    score(client, token, "25.00", "usd")
+    score(client, token, "10000.01", "usd")  # declined by rules
+
+    resp = client.get("/v1/risk_decisions", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200, resp.text
+    decisions = resp.json()
+
+    assert len(decisions) == 2
+    # newest first: the hard-ceiling decline was scored second
+    assert decisions[0]["decision"] == "decline"
+    assert decisions[0]["stage"] == "rules"
+    assert decisions[1]["decision"] == "allow"
+
+
+def test_risk_decisions_never_returns_another_merchants_history(client, sign_internal_jwt):
+    merchant_a = uuid.UUID("a0000000-0000-0000-0000-000000000006")
+    merchant_b = uuid.UUID("a0000000-0000-0000-0000-000000000007")
+
+    score(client, sign_internal_jwt(merchant_a), "25.00", "usd")
+
+    resp = client.get(
+        "/v1/risk_decisions", headers={"Authorization": f"Bearer {sign_internal_jwt(merchant_b)}"}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == []

@@ -80,6 +80,40 @@ func TestDeliveriesAreScopedPerMerchant(t *testing.T) {
 	require.Len(t, ownDeliveries, 1)
 }
 
+func TestListEndpointsIsScopedPerMerchant(t *testing.T) {
+	store := setupStore(t)
+	ctx := context.Background()
+	merchantA := uuid.New()
+	merchantB := uuid.New()
+
+	_, _, err := store.CreateEndpoint(ctx, merchantA, "https://a.example/hook")
+	require.NoError(t, err)
+	_, _, err = store.CreateEndpoint(ctx, merchantA, "https://a2.example/hook")
+	require.NoError(t, err)
+	_, _, err = store.CreateEndpoint(ctx, merchantB, "https://b.example/hook")
+	require.NoError(t, err)
+
+	endpointsA, err := store.ListEndpoints(ctx, merchantA)
+	require.NoError(t, err)
+	require.Len(t, endpointsA, 2, "merchant A must see exactly its own endpoints, never merchant B's")
+
+	endpointsB, err := store.ListEndpoints(ctx, merchantB)
+	require.NoError(t, err)
+	require.Len(t, endpointsB, 1)
+}
+
+// TestListEndpoints_EmptyResultIsNonNil guards a real bug: a nil Go slice
+// marshals to the JSON literal `null`, not `[]`, breaking any client typed
+// against "always an array" for a merchant with zero registered endpoints.
+func TestListEndpoints_EmptyResultIsNonNil(t *testing.T) {
+	store := setupStore(t)
+
+	endpoints, err := store.ListEndpoints(context.Background(), uuid.New())
+	require.NoError(t, err)
+	require.NotNil(t, endpoints)
+	require.Empty(t, endpoints)
+}
+
 func TestGetDeliveryJob_JoinsEndpointAndEvent(t *testing.T) {
 	store := setupStore(t)
 	ctx := context.Background()

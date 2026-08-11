@@ -35,6 +35,53 @@ type ScoreResult struct {
 	Reasons         []string  `json:"reasons"`
 }
 
+// Decision is a past scoring outcome, as read by conduit-dashboard's risk
+// decisions view — the same shape ScoreResult represents at scoring time,
+// plus the identity and timestamp a list view needs.
+type Decision struct {
+	ID              uuid.UUID       `json:"id"`
+	PaymentIntentID uuid.UUID       `json:"payment_intent_id"`
+	Amount          decimal.Decimal `json:"amount"`
+	Currency        string          `json:"currency"`
+	Decision        string          `json:"decision"`
+	RiskScore       float64         `json:"risk_score"`
+	Stage           string          `json:"stage"`
+	Reasons         []string        `json:"reasons"`
+	CreatedAt       time.Time       `json:"created_at"`
+}
+
+// ListDecisions calls conduit-risk's read-only /v1/risk_decisions, signing
+// a fresh internal JWT the same as Score does — this is a read, not a
+// scoring event, so it never writes to scoring_events.
+func (c *Client) ListDecisions(ctx context.Context, merchantID uuid.UUID) ([]Decision, error) {
+	token, err := authn.SignInternalJWT(c.jwtSecret, merchantID)
+	if err != nil {
+		return nil, fmt.Errorf("signing internal token: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/risk_decisions", nil)
+	if err != nil {
+		return nil, fmt.Errorf("building request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("calling conduit-risk: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("conduit-risk returned %d", resp.StatusCode)
+	}
+
+	var decisions []Decision
+	if err := json.NewDecoder(resp.Body).Decode(&decisions); err != nil {
+		return nil, fmt.Errorf("decoding conduit-risk response: %w", err)
+	}
+	return decisions, nil
+}
+
 // Score calls conduit-risk synchronously — docs/ARCHITECTURE.md: "On
 // confirmation, calls conduit-risk synchronously — a decline blocks the
 // charge entirely, no ledger entry is created." There's no separate

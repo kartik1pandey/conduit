@@ -125,8 +125,37 @@ services:
       conduit-billing:
         condition: service_started
 
-  # --- Add the remaining service below as it's built. Same shape as above:
-  # (conduit-dashboard)
+  # A second, independent OPA instance for conduit-dashboard's own RBAC
+  # policy (policies/dashboard.rego) — not the same container as `opa`
+  # above. Each service stays self-contained per ARCHITECTURE.md's repo
+  # layout, so dashboard's authorization policy gets its own sidecar rather
+  # than sharing conduit-risk's, even though the mechanism (a real OPA
+  # server) is identical.
+  opa-dashboard:
+    image: openpolicyagent/opa:1.19.0
+    command: ["run", "--server", "--addr", ":8181", "/policies"]
+    volumes:
+      - ./services/conduit-dashboard/policies:/policies:ro
+    ports:
+      - "8182:8181"
+
+  conduit-dashboard:
+    build: ./services/conduit-dashboard
+    env_file: .env
+    environment:
+      DASHBOARD_DATABASE_URL: postgres://conduit:conduit@postgres:5432/conduit_dashboard
+      DASHBOARD_OPA_URL: http://opa-dashboard:8181
+      CONDUIT_CORE_URL: http://conduit-core:8000
+      PORT: "3000"
+    ports:
+      - "3005:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opa-dashboard:
+        condition: service_started
+      conduit-core:
+        condition: service_started
 
 volumes:
   conduit_postgres_data:

@@ -26,6 +26,7 @@ func NewHandlers(client *webhooksclient.Client) *Handlers {
 
 func (h *Handlers) Register(mux *http.ServeMux, requireIdempotency func(http.Handler) http.Handler) {
 	mux.Handle("POST /v1/webhook_endpoints", requireIdempotency(http.HandlerFunc(h.create)))
+	mux.HandleFunc("GET /v1/webhook_endpoints", h.list)
 	mux.HandleFunc("GET /v1/webhook_endpoints/{id}/deliveries", h.listDeliveries)
 }
 
@@ -52,6 +53,21 @@ func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, endpoint)
+}
+
+func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
+	merchantID, ok := authn.MerchantIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing merchant context")
+		return
+	}
+
+	endpoints, err := h.client.ListEndpoints(r.Context(), merchantID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not list webhook endpoints")
+		return
+	}
+	writeJSON(w, http.StatusOK, endpoints)
 }
 
 func (h *Handlers) listDeliveries(w http.ResponseWriter, r *http.Request) {

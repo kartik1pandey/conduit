@@ -10,34 +10,36 @@ import (
 )
 
 type Config struct {
-	DatabaseURL         string
-	RedisURL            string
-	InternalJWTSecret   string
-	Port                string
-	LedgerBaseURL       string
-	LedgerCallTimeout   time.Duration
-	WebhooksBaseURL     string
-	RiskBaseURL         string
-	RiskCallTimeout     time.Duration
-	BillingBaseURL      string
-	BillingCallTimeout  time.Duration
-	IdempotencyCacheTTL time.Duration
-	RateLimitPerMinute  int
+	DatabaseURL            string
+	RedisURL               string
+	InternalJWTSecret      string
+	Port                   string
+	LedgerBaseURL          string
+	LedgerCallTimeout      time.Duration
+	WebhooksBaseURL        string
+	RiskBaseURL            string
+	RiskCallTimeout        time.Duration
+	BillingBaseURL         string
+	BillingCallTimeout     time.Duration
+	DashboardSessionSecret string
+	IdempotencyCacheTTL    time.Duration
+	RateLimitPerMinute     int
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		DatabaseURL:        os.Getenv("CORE_DATABASE_URL"),
-		RedisURL:           os.Getenv("REDIS_URL"),
-		InternalJWTSecret:  os.Getenv("INTERNAL_JWT_SECRET"),
-		Port:               os.Getenv("CONDUIT_CORE_PORT"),
-		LedgerBaseURL:      os.Getenv("CONDUIT_LEDGER_URL"),
-		LedgerCallTimeout:  5 * time.Second,
-		WebhooksBaseURL:    os.Getenv("CONDUIT_WEBHOOKS_URL"),
-		RiskBaseURL:        os.Getenv("CONDUIT_RISK_URL"),
-		RiskCallTimeout:    5 * time.Second,
-		BillingBaseURL:     os.Getenv("CONDUIT_BILLING_URL"),
-		BillingCallTimeout: 5 * time.Second,
+		DatabaseURL:            os.Getenv("CORE_DATABASE_URL"),
+		RedisURL:               os.Getenv("REDIS_URL"),
+		InternalJWTSecret:      os.Getenv("INTERNAL_JWT_SECRET"),
+		Port:                   os.Getenv("CONDUIT_CORE_PORT"),
+		LedgerBaseURL:          os.Getenv("CONDUIT_LEDGER_URL"),
+		LedgerCallTimeout:      5 * time.Second,
+		WebhooksBaseURL:        os.Getenv("CONDUIT_WEBHOOKS_URL"),
+		RiskBaseURL:            os.Getenv("CONDUIT_RISK_URL"),
+		RiskCallTimeout:        5 * time.Second,
+		BillingBaseURL:         os.Getenv("CONDUIT_BILLING_URL"),
+		BillingCallTimeout:     5 * time.Second,
+		DashboardSessionSecret: os.Getenv("DASHBOARD_SESSION_SECRET"),
 	}
 	if cfg.Port == "" {
 		cfg.Port = "8000"
@@ -62,6 +64,9 @@ func Load() (Config, error) {
 	}
 	if cfg.BillingBaseURL == "" {
 		return Config{}, fmt.Errorf("CONDUIT_BILLING_URL is required")
+	}
+	if cfg.DashboardSessionSecret == "" {
+		return Config{}, fmt.Errorf("DASHBOARD_SESSION_SECRET is required")
 	}
 
 	ttlHours := os.Getenv("IDEMPOTENCY_KEY_TTL_HOURS")

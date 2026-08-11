@@ -44,6 +44,48 @@ def merchant_history(
     )
 
 
+@dataclass
+class ScoringEvent:
+    id: UUID
+    payment_intent_id: UUID
+    amount: Decimal
+    currency: str
+    risk_score: float
+    decision: str
+    stage: str
+    reasons: list[str]
+    created_at: object
+
+
+def list_events(pool: ConnectionPool, merchant_id: UUID, limit: int) -> list[ScoringEvent]:
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, payment_intent_id, amount, currency, risk_score,
+                   decision, stage, reasons, created_at
+            FROM scoring_events
+            WHERE merchant_id = %s
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (merchant_id, limit),
+        ).fetchall()
+    return [
+        ScoringEvent(
+            id=row[0],
+            payment_intent_id=row[1],
+            amount=row[2],
+            currency=row[3],
+            risk_score=float(row[4]),
+            decision=row[5],
+            stage=row[6],
+            reasons=row[7],
+            created_at=row[8],
+        )
+        for row in rows
+    ]
+
+
 def record_event(
     pool: ConnectionPool,
     *,

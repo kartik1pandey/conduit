@@ -2,6 +2,7 @@ package merchant
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 )
 
@@ -20,6 +21,7 @@ func NewHandlers(store *Store) *Handlers {
 // merchant-auth middleware alongside payment_intents routes.
 func (h *Handlers) RegisterUnauthenticated(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/merchants", h.create)
+	mux.HandleFunc("POST /v1/merchants/verify-secret", h.verifySecret)
 }
 
 type createRequest struct {
@@ -49,4 +51,52 @@ func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(createResponse{Merchant: m, SecretKey: secretKey})
+}
+
+type verifySecretRequest struct {
+	SecretKey string `json:"secret_key"`
+}
+
+type verifySecretResponse struct {
+	MerchantID string `json:"merchant_id"`
+	Name       string `json:"name"`
+}
+
+// verifySecret lets conduit-dashboard's signup flow prove a merchant holds
+// a given sk_test_... key exactly once, without conduit-core ever handing
+// back the merchant_id to anyone who doesn't already have the key — the
+// dashboard never stores this raw secret key afterward (see
+// authn.RequireMerchantContext's package doc), only the merchant_id and the
+// dashboard user's own credentials. Unauthenticated for the same reason
+// Create is: proving you hold the key IS the authentication.
+func (h *Handlers) verifySecret(w http.ResponseWriter, r *http.Request) {
+	var req verifySecretRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SecretKey == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "secret_key is required"})
+		return
+	}
+
+	merchantID, err := h.store.AuthenticateBySecretKey(r.Context(), req.SecretKey)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid secret key"})
+		return
+	case err != nil:
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "could not verify secret key"})
+		return
+	}
+
+	m, err := h.store.Get(r.Context(), merchantID)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "could not fetch merchant"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(verifySecretResponse{MerchantID: m.ID.String(), Name: m.Name})
 }

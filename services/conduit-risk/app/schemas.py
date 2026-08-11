@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
@@ -21,3 +22,19 @@ class ScoreResponse(BaseModel):
     risk_score: float
     stage: Literal["rules", "model"]
     reasons: list[str]
+
+
+# RiskDecision is conduit-dashboard's read model for the "risk decisions
+# with reasons" view (docs/ARCHITECTURE.md) — the same fields ScoreResponse
+# returns at scoring time, plus the id and timestamp a list view needs and
+# minus payment_intent_id's role as the single-record lookup key.
+class RiskDecision(BaseModel):
+    id: UUID
+    payment_intent_id: UUID
+    amount: Decimal
+    currency: str
+    decision: Literal["allow", "decline"]
+    risk_score: float
+    stage: Literal["rules", "model"]
+    reasons: list[str]
+    created_at: datetime

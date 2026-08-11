@@ -23,6 +23,7 @@ import (
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/paymentintent"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/ratelimit"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/riskclient"
+	"github.com/kartik1pandey/conduit/services/conduit-core/internal/riskdecision"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/webhookendpoint"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/webhooksclient"
 	"github.com/kartik1pandey/conduit/services/conduit-core/migrations"
@@ -75,6 +76,7 @@ func main() {
 	piStore := paymentintent.NewStore(pool)
 	piHandlers := paymentintent.NewHandlers(piStore, ledgerClient, riskClient, webhooksClient)
 	webhookEndpointHandlers := webhookendpoint.NewHandlers(webhooksClient)
+	riskDecisionHandlers := riskdecision.NewHandlers(riskClient)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", healthHandler(pool, redisClient))
@@ -83,7 +85,8 @@ func main() {
 	protected := http.NewServeMux()
 	piHandlers.Register(protected, requireIdempotency)
 	webhookEndpointHandlers.Register(protected, requireIdempotency)
-	mux.Handle("/", authn.RequireAPIKey(merchantStore)(requireWithinLimit(recordUsage(protected))))
+	riskDecisionHandlers.Register(protected)
+	mux.Handle("/", authn.RequireMerchantContext(merchantStore, cfg.DashboardSessionSecret)(requireWithinLimit(recordUsage(protected))))
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,

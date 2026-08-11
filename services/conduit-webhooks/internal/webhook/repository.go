@@ -73,7 +73,10 @@ func (s *Store) ListEndpoints(ctx context.Context, merchantID uuid.UUID) ([]Endp
 	}
 	defer rows.Close()
 
-	var endpoints []Endpoint
+	// Initialized non-nil: a nil slice marshals to JSON `null`, not `[]` —
+	// wrong for an API response a client expects to always be an array,
+	// even an empty one (Checkpoint 4.4's dashboard views rely on this).
+	endpoints := []Endpoint{}
 	for rows.Next() {
 		var e Endpoint
 		if err := rows.Scan(&e.ID, &e.MerchantID, &e.URL, &e.CreatedAt); err != nil {
@@ -216,7 +219,10 @@ func (s *Store) ListDeliveriesForEndpoint(ctx context.Context, merchantID, endpo
 	}
 	defer rows.Close()
 
-	var deliveries []Delivery
+	// Initialized non-nil: a nil slice marshals to JSON `null`, not `[]` —
+	// wrong for an API response a client expects to always be an array,
+	// even an empty one.
+	deliveries := []Delivery{}
 	for rows.Next() {
 		var d Delivery
 		if err := rows.Scan(&d.ID, &d.WebhookEventID, &d.WebhookEndpointID, &d.Status, &d.AttemptCount,

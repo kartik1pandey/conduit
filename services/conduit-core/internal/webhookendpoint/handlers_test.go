@@ -40,6 +40,12 @@ func fakeWebhooksService(t *testing.T) *httptest.Server {
 			{"id": uuid.New(), "status": "delivered", "attempt_count": 1},
 		})
 	})
+	mux.HandleFunc("GET /v1/webhook_endpoints", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"id": uuid.New(), "url": "https://merchant.example/hooks", "created_at": time.Now()},
+		})
+	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
@@ -94,6 +100,33 @@ func TestWebhookEndpointProxy(t *testing.T) {
 	require.NoError(t, err)
 	defer listResp.Body.Close()
 	require.Equal(t, http.StatusOK, listResp.StatusCode)
+}
+
+func TestWebhookEndpointProxy_List(t *testing.T) {
+	fakeSvc := fakeWebhooksService(t)
+	client := webhooksclient.New(fakeSvc.URL, testSecret, 5*time.Second)
+	handlers := NewHandlers(client)
+
+	protected := http.NewServeMux()
+	handlers.Register(protected, noopIdempotency)
+
+	mux := http.NewServeMux()
+	mux.Handle("/", authn.RequireAPIKey(staticAuthenticator{merchantID: uuid.New()})(protected))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/v1/webhook_endpoints", nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+testSecretKey)
+
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var endpoints []map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&endpoints))
+	require.Len(t, endpoints, 1)
 }
 
 func TestWebhookEndpointProxy_RequiresAuth(t *testing.T) {

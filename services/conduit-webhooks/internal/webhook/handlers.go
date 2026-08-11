@@ -21,6 +21,7 @@ func NewHandlers(store *Store, worker *Worker) *Handlers {
 
 func (h *Handlers) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/webhook_endpoints", h.createEndpoint)
+	mux.HandleFunc("GET /v1/webhook_endpoints", h.listEndpoints)
 	mux.HandleFunc("GET /v1/webhook_endpoints/{id}/deliveries", h.listDeliveries)
 	mux.HandleFunc("POST /v1/events", h.createEvent)
 }
@@ -53,6 +54,24 @@ func (h *Handlers) createEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, createEndpointResponse{Endpoint: endpoint, Secret: secret})
+}
+
+// listEndpoints backs conduit-core's dashboard-facing proxy — Store.ListEndpoints
+// already existed for internal use by createEvent's fan-out; this just
+// exposes the same merchant-scoped read over HTTP.
+func (h *Handlers) listEndpoints(w http.ResponseWriter, r *http.Request) {
+	merchantID, ok := authn.MerchantIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing merchant context")
+		return
+	}
+
+	endpoints, err := h.store.ListEndpoints(r.Context(), merchantID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not list webhook endpoints")
+		return
+	}
+	writeJSON(w, http.StatusOK, endpoints)
 }
 
 func (h *Handlers) listDeliveries(w http.ResponseWriter, r *http.Request) {
