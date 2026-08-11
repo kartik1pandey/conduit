@@ -52,6 +52,19 @@ const (
 // cursor-based pagination's extra complexity to stay correct under
 // concurrent writes the way, say, a real production Stripe-scale endpoint
 // would.
+// list godoc
+//
+//	@Summary		List payment intents
+//	@Description	Lists the authenticated merchant's payment intents, newest first.
+//	@Tags			payment_intents
+//	@Produce		json
+//	@Param			limit	query		int	false	"Max results (default 50, capped at 200)"
+//	@Param			offset	query		int	false	"Offset for pagination (default 0)"
+//	@Success		200		{array}		PaymentIntent
+//	@Failure		400		{object}	map[string]string
+//	@Failure		401		{object}	map[string]string
+//	@Security		ApiKeyAuth
+//	@Router			/v1/payment_intents [get]
 func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
 	merchantID, ok := authn.MerchantIDFromContext(r.Context())
 	if !ok {
@@ -96,6 +109,20 @@ type createRequest struct {
 	Description string          `json:"description"`
 }
 
+// create godoc
+//
+//	@Summary		Create a payment intent
+//	@Description	Creates a new payment intent in the `created` state. Requires an Idempotency-Key — a duplicate key returns the original response instead of creating a second record.
+//	@Tags			payment_intents
+//	@Accept			json
+//	@Produce		json
+//	@Param			Idempotency-Key	header		string			true	"Idempotency key"
+//	@Param			request			body		createRequest	true	"Payment intent details"
+//	@Success		201				{object}	PaymentIntent
+//	@Failure		400				{object}	map[string]string
+//	@Failure		401				{object}	map[string]string
+//	@Security		ApiKeyAuth
+//	@Router			/v1/payment_intents [post]
 func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
 	merchantID, ok := authn.MerchantIDFromContext(r.Context())
 	if !ok {
@@ -125,6 +152,19 @@ func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, pi)
 }
 
+// get godoc
+//
+//	@Summary		Get a payment intent
+//	@Description	Fetches a payment intent by id, scoped to the authenticated merchant. Returns 404 for another merchant's payment intent — never a 403 that would confirm it exists.
+//	@Tags			payment_intents
+//	@Produce		json
+//	@Param			id	path		string	true	"Payment intent ID"
+//	@Success		200	{object}	PaymentIntent
+//	@Failure		400	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Failure		404	{object}	map[string]string
+//	@Security		ApiKeyAuth
+//	@Router			/v1/payment_intents/{id} [get]
 func (h *Handlers) get(w http.ResponseWriter, r *http.Request) {
 	merchantID, ok := authn.MerchantIDFromContext(r.Context())
 	if !ok {
@@ -159,6 +199,22 @@ func (h *Handlers) get(w http.ResponseWriter, r *http.Request) {
 // deterministic idempotency key, is what makes retrying a confirm (whether
 // a client retry or conduit-core recovering from a crash mid-confirm) safe
 // to do more than once.
+// confirm godoc
+//
+//	@Summary		Confirm a payment intent
+//	@Description	Drives created|pending -> succeeded|failed. Scores the charge with conduit-risk synchronously first; a decline transitions straight to failed with no ledger entry ever created. An already-terminal payment intent is returned as-is rather than reprocessed.
+//	@Tags			payment_intents
+//	@Produce		json
+//	@Param			Idempotency-Key	header		string	true	"Idempotency key"
+//	@Param			id				path		string	true	"Payment intent ID"
+//	@Success		200				{object}	PaymentIntent
+//	@Failure		400				{object}	map[string]string
+//	@Failure		401				{object}	map[string]string
+//	@Failure		404				{object}	map[string]string
+//	@Failure		409				{object}	map[string]string
+//	@Failure		502				{object}	map[string]string
+//	@Security		ApiKeyAuth
+//	@Router			/v1/payment_intents/{id}/confirm [post]
 func (h *Handlers) confirm(w http.ResponseWriter, r *http.Request) {
 	merchantID, ok := authn.MerchantIDFromContext(r.Context())
 	if !ok {
@@ -250,6 +306,22 @@ func (h *Handlers) confirm(w http.ResponseWriter, r *http.Request) {
 // in StatusSucceeded can be refunded — never StatusCreated or StatusPending
 // (there is no charge on the ledger yet to reverse) and never StatusFailed
 // (there was never a charge at all, per Checkpoint 3.2).
+// refund godoc
+//
+//	@Summary		Refund a payment intent
+//	@Description	Drives succeeded -> refunded, posting a second balanced ledger transaction with entries reversed relative to the original charge. Only a succeeded payment intent can be refunded.
+//	@Tags			payment_intents
+//	@Produce		json
+//	@Param			Idempotency-Key	header		string	true	"Idempotency key"
+//	@Param			id				path		string	true	"Payment intent ID"
+//	@Success		200				{object}	PaymentIntent
+//	@Failure		400				{object}	map[string]string
+//	@Failure		401				{object}	map[string]string
+//	@Failure		404				{object}	map[string]string
+//	@Failure		409				{object}	map[string]string
+//	@Failure		502				{object}	map[string]string
+//	@Security		ApiKeyAuth
+//	@Router			/v1/payment_intents/{id}/refund [post]
 func (h *Handlers) refund(w http.ResponseWriter, r *http.Request) {
 	merchantID, ok := authn.MerchantIDFromContext(r.Context())
 	if !ok {

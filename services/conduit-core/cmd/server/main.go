@@ -1,4 +1,14 @@
 // Command server runs the conduit-core HTTP API.
+//
+// @title						Conduit API
+// @version					1.0
+// @description				The payment API for Conduit, a test-mode payments infrastructure platform. Mirrors Stripe's own object naming (payment_intents) and auth model (sk_test_/pk_test_ key pairs) deliberately.
+// @contact.name				Conduit
+// @license.name				MIT
+// @securityDefinitions.apikey	ApiKeyAuth
+// @in							header
+// @name						Authorization
+// @description				Merchant secret key, sent as "Bearer sk_test_...". Obtained once from POST /v1/merchants.
 package main
 
 import (
@@ -10,8 +20,11 @@ import (
 	"syscall"
 	"time"
 
+	httpSwagger "github.com/swaggo/http-swagger/v2"
+
 	"github.com/redis/go-redis/v9"
 
+	_ "github.com/kartik1pandey/conduit/services/conduit-core/docs"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/authn"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/billingclient"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/config"
@@ -80,7 +93,8 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", healthHandler(pool, redisClient))
-	merchantHandlers.RegisterUnauthenticated(mux) // no API key exists yet for a merchant that doesn't exist yet
+	mux.Handle("/swagger/", httpSwagger.Handler(httpSwagger.URL("/swagger/doc.json"))) // public API docs, no API key required to read them
+	merchantHandlers.RegisterUnauthenticated(mux)                                      // no API key exists yet for a merchant that doesn't exist yet
 
 	protected := http.NewServeMux()
 	piHandlers.Register(protected, requireIdempotency)
@@ -108,6 +122,15 @@ func main() {
 	}
 }
 
+// healthHandler godoc
+//
+//	@Summary		Health check
+//	@Description	Returns 200 if Postgres and Redis are both reachable, 503 otherwise.
+//	@Tags			health
+//	@Produce		json
+//	@Success		200	{object}	map[string]string
+//	@Failure		503	{object}	map[string]string
+//	@Router			/health [get]
 func healthHandler(pool interface{ Ping(context.Context) error }, redisClient *redis.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
