@@ -28,6 +28,16 @@ FROM node:20-slim AS runtime
 WORKDIR /app
 RUN useradd --uid 10001 --create-home conduit
 ENV NODE_ENV=production
+# Next's standalone server.js binds to whatever HOSTNAME resolves to, and
+# without this it's not guaranteed to be reachable from outside the
+# container's own network namespace — a PaaS's edge proxy connects from a
+# different address than "localhost", and the request never arrives even
+# though the process logs "Ready" and looks healthy from inside. Next's own
+# official Docker deployment example sets this explicitly for exactly this
+# reason; found the hard way deploying to Render, where every other
+# service in this project (plain net/http servers that already bind
+# 0.0.0.0 by default) worked immediately and this was the one exception.
+ENV HOSTNAME=0.0.0.0
 COPY --from=build /app/.next/standalone ./
 # argon2 loads its compiled .node binary via a runtime directory scan
 # (node-gyp-build/prebuildify), not a statically analyzable require path —
