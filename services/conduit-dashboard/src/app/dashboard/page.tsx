@@ -2,6 +2,8 @@ import Link from "next/link";
 import { auth } from "@/auth";
 import { Badge, statusTone } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
+import { AnimatedNumber } from "@/components/ui/AnimatedNumber";
+import { Reveal, RevealLi } from "@/components/ui/Reveal";
 import {
   listPaymentIntents,
   listWebhookEndpoints,
@@ -57,13 +59,13 @@ export default async function DashboardOverviewPage() {
         <div className="flex gap-3">
           <Link
             href="/dashboard/webhooks/new"
-            className="inline-flex items-center justify-center rounded-lg border border-[var(--border)] px-4 py-2 text-sm font-medium transition hover:bg-[var(--border)]/40"
+            className="inline-flex items-center justify-center rounded-[var(--radius-sm)] border border-[var(--border)] px-4 py-2 text-sm font-medium transition hover:bg-[var(--surface-elevated)]"
           >
             Register webhook
           </Link>
           <Link
             href="/dashboard/transactions/new"
-            className="inline-flex items-center justify-center rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
+            className="inline-flex items-center justify-center rounded-[var(--radius-sm)] bg-[var(--accent)] px-4 py-2 text-sm font-medium text-[var(--accent-foreground)] transition hover:opacity-90"
           >
             New payment
           </Link>
@@ -71,31 +73,41 @@ export default async function DashboardOverviewPage() {
       </div>
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <StatCard label="Transactions" value={String(intents.length)} />
-        <StatCard label="Succeeded" value={String(succeeded)} tone="success" />
-        <StatCard label="Failed" value={String(failed)} tone="danger" />
-        <StatCard label="Webhook endpoints" value={String(endpoints.length)} />
+        <Reveal delay={0}>
+          <StatCard label="Transactions" value={intents.length} />
+        </Reveal>
+        <Reveal delay={0.05}>
+          <StatCard label="Succeeded" value={succeeded} tone="success" />
+        </Reveal>
+        <Reveal delay={0.1}>
+          <StatCard label="Failed" value={failed} tone="danger" />
+        </Reveal>
+        <Reveal delay={0.15}>
+          <StatCard label="Webhook endpoints" value={endpoints.length} />
+        </Reveal>
       </div>
 
       {volumes.length > 0 && (
-        <Card className="p-6">
-          <p className="mb-3 text-sm font-medium">Succeeded volume</p>
-          <div className="flex flex-wrap gap-6">
-            {volumes.map((v) => (
-              <div key={v.currency}>
-                <p className="text-2xl font-semibold">
-                  {formatMoney(v.total, v.currency)}
-                </p>
-              </div>
-            ))}
-          </div>
-          {refunded > 0 && (
-            <p className="mt-3 text-xs text-[var(--muted)]">
-              {refunded} of the above {refunded === 1 ? "has" : "have"} since
-              been refunded.
-            </p>
-          )}
-        </Card>
+        <Reveal delay={0.2}>
+          <Card className="p-6">
+            <p className="mb-3 text-sm font-medium">Succeeded volume</p>
+            <div className="flex flex-wrap gap-6">
+              {volumes.map((v) => (
+                <div key={v.currency}>
+                  <p className="font-display text-2xl font-semibold tabular-nums">
+                    {formatMoney(v.total, v.currency)}
+                  </p>
+                </div>
+              ))}
+            </div>
+            {refunded > 0 && (
+              <p className="mt-3 text-xs text-[var(--muted)]">
+                {refunded} of the above {refunded === 1 ? "has" : "have"} since
+                been refunded.
+              </p>
+            )}
+          </Card>
+        </Reveal>
       )}
 
       <div>
@@ -122,32 +134,35 @@ export default async function DashboardOverviewPage() {
               </p>
               <Link
                 href="/dashboard/transactions/new"
-                className="mt-2 inline-flex items-center justify-center rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
+                className="mt-2 inline-flex items-center justify-center rounded-[var(--radius-sm)] bg-[var(--accent)] px-4 py-2 text-sm font-medium text-[var(--accent-foreground)] transition hover:opacity-90"
               >
                 Create your first payment
               </Link>
             </div>
           ) : (
             <ul>
-              {recent.map((pi) => (
-                <li
+              {recent.map((pi, i) => (
+                <RevealLi
                   key={pi.id}
+                  delay={i * 0.04}
                   className="border-b border-[var(--border)] last:border-0"
                 >
                   <Link
                     href={`/dashboard/transactions/${pi.id}`}
-                    className="flex items-center justify-between px-4 py-3 text-sm transition hover:bg-[var(--border)]/20"
+                    className="flex items-center justify-between px-4 py-3 text-sm transition hover:bg-[var(--surface-elevated)]"
                   >
                     <span className="font-mono text-xs text-[var(--muted)]">
                       {pi.id}
                     </span>
-                    <span>{formatMoney(pi.amount, pi.currency)}</span>
+                    <span className="tabular-nums">
+                      {formatMoney(pi.amount, pi.currency)}
+                    </span>
                     <Badge tone={statusTone(pi.status)}>{pi.status}</Badge>
                     <span className="text-[var(--muted)]">
                       {formatDate(pi.created_at)}
                     </span>
                   </Link>
-                </li>
+                </RevealLi>
               ))}
             </ul>
           )}
@@ -163,19 +178,21 @@ function StatCard({
   tone,
 }: {
   label: string;
-  value: string;
+  value: number;
   tone?: "success" | "danger";
 }) {
   const valueColor =
     tone === "success"
-      ? "text-emerald-600 dark:text-emerald-400"
+      ? "text-[var(--success)]"
       : tone === "danger"
-        ? "text-rose-600 dark:text-rose-400"
+        ? "text-[var(--danger)]"
         : "";
   return (
     <Card className="p-4">
       <p className="text-xs text-[var(--muted)]">{label}</p>
-      <p className={`mt-1 text-2xl font-semibold ${valueColor}`}>{value}</p>
+      <p className={`mt-1 font-display text-2xl font-semibold ${valueColor}`}>
+        <AnimatedNumber value={value} />
+      </p>
     </Card>
   );
 }

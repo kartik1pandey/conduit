@@ -1,8 +1,11 @@
 const TONES = {
-  success: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-  danger: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
-  neutral: "bg-slate-500/10 text-[var(--muted)]",
-  warning: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  success:
+    "bg-[color-mix(in_srgb,var(--success)_12%,transparent)] text-[var(--success)]",
+  danger:
+    "bg-[color-mix(in_srgb,var(--danger)_12%,transparent)] text-[var(--danger)]",
+  neutral: "bg-[var(--surface-elevated)] text-[var(--muted)]",
+  warning:
+    "bg-[color-mix(in_srgb,var(--warning)_12%,transparent)] text-[var(--warning)]",
 } as const;
 
 export function Badge({
@@ -14,7 +17,7 @@ export function Badge({
 }) {
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${TONES[tone]}`}
+      className={`inline-flex items-center rounded-[var(--radius-xs)] px-2.5 py-0.5 text-xs font-medium ${TONES[tone]}`}
     >
       {children}
     </span>

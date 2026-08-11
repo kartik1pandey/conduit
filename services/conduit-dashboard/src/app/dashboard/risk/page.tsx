@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { Badge, statusTone } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { RevealTr } from "@/components/ui/Reveal";
 import { listRiskDecisions } from "@/lib/coreClient";
 import { formatDate, formatMoney } from "@/lib/format";
 
@@ -34,9 +35,10 @@ export default async function RiskPage() {
               </tr>
             </thead>
             <tbody>
-              {decisions.map((d) => (
-                <tr
+              {decisions.map((d, i) => (
+                <RevealTr
                   key={d.id}
+                  delay={Math.min(i, 12) * 0.03}
                   className="border-b border-[var(--border)] last:border-0"
                 >
                   <td className="px-4 py-3">
@@ -63,7 +65,7 @@ export default async function RiskPage() {
                   <td className="px-4 py-3 text-[var(--muted)]">
                     {formatDate(d.created_at)}
                   </td>
-                </tr>
+                </RevealTr>
               ))}
             </tbody>
           </table>

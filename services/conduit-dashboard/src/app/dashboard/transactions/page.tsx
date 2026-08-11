@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { Badge, statusTone } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { RevealTr } from "@/components/ui/Reveal";
 import { listPaymentIntents } from "@/lib/coreClient";
 import { formatDate, formatMoney } from "@/lib/format";
 
@@ -18,7 +19,7 @@ export default async function TransactionsPage() {
         <h1 className="text-2xl font-semibold">Transactions</h1>
         <Link
           href="/dashboard/transactions/new"
-          className="inline-flex items-center justify-center rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
+          className="inline-flex items-center justify-center rounded-[var(--radius-sm)] bg-[var(--accent)] px-4 py-2 text-sm font-medium text-[var(--accent-foreground)] transition hover:opacity-90"
         >
           New payment
         </Link>
@@ -42,9 +43,10 @@ export default async function TransactionsPage() {
               </tr>
             </thead>
             <tbody>
-              {intents.map((pi) => (
-                <tr
+              {intents.map((pi, i) => (
+                <RevealTr
                   key={pi.id}
+                  delay={Math.min(i, 12) * 0.03}
                   className="border-b border-[var(--border)] last:border-0"
                 >
                   <td className="px-4 py-3">
@@ -55,7 +57,7 @@ export default async function TransactionsPage() {
                       {pi.id}
                     </Link>
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 tabular-nums">
                     {formatMoney(pi.amount, pi.currency)}
                   </td>
                   <td className="px-4 py-3">
@@ -64,7 +66,7 @@ export default async function TransactionsPage() {
                   <td className="px-4 py-3 text-[var(--muted)]">
                     {formatDate(pi.created_at)}
                   </td>
-                </tr>
+                </RevealTr>
               ))}
             </tbody>
           </table>
