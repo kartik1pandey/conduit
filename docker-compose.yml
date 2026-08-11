@@ -86,6 +86,18 @@ services:
       opa:
         condition: service_started
 
+  conduit-billing:
+    build: ./services/conduit-billing
+    env_file: .env
+    environment:
+      BILLING_DATABASE_URL: postgres://conduit:conduit@postgres:5432/conduit_billing
+      CONDUIT_BILLING_PORT: "8004"
+    ports:
+      - "8004:8004"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   conduit-core:
     build: ./services/conduit-core
     env_file: .env
@@ -95,6 +107,7 @@ services:
       CONDUIT_LEDGER_URL: http://conduit-ledger:8002
       CONDUIT_WEBHOOKS_URL: http://conduit-webhooks:8003
       CONDUIT_RISK_URL: http://conduit-risk:8001
+      CONDUIT_BILLING_URL: http://conduit-billing:8004
       CONDUIT_CORE_PORT: "8000"
     ports:
       - "8000:8000"
@@ -109,9 +122,11 @@ services:
         condition: service_started
       conduit-risk:
         condition: service_started
+      conduit-billing:
+        condition: service_started
 
-  # --- Add each remaining service below as it's built. Same shape as above:
-  # (repeat the pattern for conduit-billing, conduit-dashboard)
+  # --- Add the remaining service below as it's built. Same shape as above:
+  # (conduit-dashboard)
 
 volumes:
   conduit_postgres_data:

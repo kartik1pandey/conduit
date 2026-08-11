@@ -13,11 +13,13 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/authn"
+	"github.com/kartik1pandey/conduit/services/conduit-core/internal/billingclient"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/config"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/db"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/idempotency"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/ledgerclient"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/merchant"
+	"github.com/kartik1pandey/conduit/services/conduit-core/internal/meteringmw"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/paymentintent"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/ratelimit"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/riskclient"
@@ -67,6 +69,8 @@ func main() {
 	ledgerClient := ledgerclient.New(cfg.LedgerBaseURL, cfg.InternalJWTSecret, cfg.LedgerCallTimeout)
 	webhooksClient := webhooksclient.New(cfg.WebhooksBaseURL, cfg.InternalJWTSecret, cfg.LedgerCallTimeout)
 	riskClient := riskclient.New(cfg.RiskBaseURL, cfg.InternalJWTSecret, cfg.RiskCallTimeout)
+	billingClient := billingclient.New(cfg.BillingBaseURL, cfg.InternalJWTSecret, cfg.BillingCallTimeout)
+	recordUsage := meteringmw.RecordUsage(billingClient)
 
 	piStore := paymentintent.NewStore(pool)
 	piHandlers := paymentintent.NewHandlers(piStore, ledgerClient, riskClient, webhooksClient)
@@ -79,7 +83,7 @@ func main() {
 	protected := http.NewServeMux()
 	piHandlers.Register(protected, requireIdempotency)
 	webhookEndpointHandlers.Register(protected, requireIdempotency)
-	mux.Handle("/", authn.RequireAPIKey(merchantStore)(requireWithinLimit(protected)))
+	mux.Handle("/", authn.RequireAPIKey(merchantStore)(requireWithinLimit(recordUsage(protected))))
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,

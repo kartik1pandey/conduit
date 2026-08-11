@@ -87,6 +87,7 @@ jobs:
           export CONDUIT_LEDGER_URL="http://localhost:8002"
           export CONDUIT_RISK_URL="http://localhost:8001"
           export CONDUIT_WEBHOOKS_URL="http://localhost:8003"
+          export CONDUIT_BILLING_URL="http://localhost:8004"
           if [ -d cmd/migrate ]; then go run ./cmd/migrate; fi
           # -p 1: every package's integration tests share one Postgres
           # database (conduit_test) and one Redis instance. `go test ./...`
