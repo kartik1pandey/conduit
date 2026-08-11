@@ -4,8 +4,11 @@
 !.env.example
 
 # --- Internal planning/spec docs and instructions (kept locally, never pushed) ---
+# Anchored to the repo root specifically — services/conduit-core/docs/ is
+# swaggo-generated OpenAPI output that must be committed (Checkpoint 5.3),
+# not the same thing as this project's own gitignored spec/planning docs.
 CLAUDE.md
-docs/
+/docs/
 
 # --- Go ---
 *.exe

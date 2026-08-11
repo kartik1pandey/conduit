@@ -33,6 +33,17 @@ type createResponse struct {
 	SecretKey string `json:"secret_key"`
 }
 
+// create godoc
+//
+//	@Summary		Create a merchant
+//	@Description	Bootstraps a new test-mode merchant with an sk_test_/pk_test_ key pair. The secret key is returned exactly once and never retrievable again — only its hash is persisted.
+//	@Tags			merchants
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body		createRequest	true	"Merchant name"
+//	@Success		201		{object}	createResponse
+//	@Failure		400		{object}	map[string]string
+//	@Router			/v1/merchants [post]
 func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
 	var req createRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
@@ -69,6 +80,18 @@ type verifySecretResponse struct {
 // authn.RequireMerchantContext's package doc), only the merchant_id and the
 // dashboard user's own credentials. Unauthenticated for the same reason
 // Create is: proving you hold the key IS the authentication.
+// verifySecret godoc
+//
+//	@Summary		Verify a merchant secret key
+//	@Description	Proves ownership of a merchant's sk_test_... key once and resolves it to a merchant_id. Used by conduit-dashboard's signup flow — the raw key is never stored afterward.
+//	@Tags			merchants
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body		verifySecretRequest	true	"Secret key to verify"
+//	@Success		200		{object}	verifySecretResponse
+//	@Failure		400		{object}	map[string]string
+//	@Failure		401		{object}	map[string]string
+//	@Router			/v1/merchants/verify-secret [post]
 func (h *Handlers) verifySecret(w http.ResponseWriter, r *http.Request) {
 	var req verifySecretRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SecretKey == "" {

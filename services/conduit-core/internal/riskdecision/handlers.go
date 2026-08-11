@@ -24,6 +24,16 @@ func (h *Handlers) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/risk_decisions", h.list)
 }
 
+// list godoc
+//
+//	@Summary		List risk decisions
+//	@Description	Lists the authenticated merchant's risk-scoring history — every decision and the reasons behind it — newest first.
+//	@Tags			risk_decisions
+//	@Produce		json
+//	@Success		200	{array}		riskclient.Decision
+//	@Failure		401	{object}	map[string]string
+//	@Security		ApiKeyAuth
+//	@Router			/v1/risk_decisions [get]
 func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
 	merchantID, ok := authn.MerchantIDFromContext(r.Context())
 	if !ok {

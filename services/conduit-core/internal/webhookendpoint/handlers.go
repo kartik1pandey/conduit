@@ -34,6 +34,20 @@ type createRequest struct {
 	URL string `json:"url"`
 }
 
+// create godoc
+//
+//	@Summary		Register a webhook endpoint
+//	@Description	Registers a URL to receive signed event deliveries. The response includes a per-endpoint HMAC secret, shown once, used to sign the Conduit-Signature header on every delivery to this URL.
+//	@Tags			webhook_endpoints
+//	@Accept			json
+//	@Produce		json
+//	@Param			Idempotency-Key	header		string			true	"Idempotency key"
+//	@Param			request			body		createRequest	true	"Endpoint URL"
+//	@Success		201				{object}	webhooksclient.Endpoint
+//	@Failure		400				{object}	map[string]string
+//	@Failure		401				{object}	map[string]string
+//	@Security		ApiKeyAuth
+//	@Router			/v1/webhook_endpoints [post]
 func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
 	merchantID, ok := authn.MerchantIDFromContext(r.Context())
 	if !ok {
@@ -55,6 +69,16 @@ func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, endpoint)
 }
 
+// list godoc
+//
+//	@Summary		List webhook endpoints
+//	@Description	Lists every webhook endpoint registered for the authenticated merchant.
+//	@Tags			webhook_endpoints
+//	@Produce		json
+//	@Success		200	{array}		webhooksclient.Endpoint
+//	@Failure		401	{object}	map[string]string
+//	@Security		ApiKeyAuth
+//	@Router			/v1/webhook_endpoints [get]
 func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
 	merchantID, ok := authn.MerchantIDFromContext(r.Context())
 	if !ok {
@@ -70,6 +94,18 @@ func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, endpoints)
 }
 
+// listDeliveries godoc
+//
+//	@Summary		List an endpoint's deliveries
+//	@Description	Lists delivery attempts for one webhook endpoint, scoped to the authenticated merchant.
+//	@Tags			webhook_endpoints
+//	@Produce		json
+//	@Param			id	path		string	true	"Webhook endpoint ID"
+//	@Success		200	{array}		webhooksclient.Delivery
+//	@Failure		400	{object}	map[string]string
+//	@Failure		401	{object}	map[string]string
+//	@Security		ApiKeyAuth
+//	@Router			/v1/webhook_endpoints/{id}/deliveries [get]
 func (h *Handlers) listDeliveries(w http.ResponseWriter, r *http.Request) {
 	merchantID, ok := authn.MerchantIDFromContext(r.Context())
 	if !ok {

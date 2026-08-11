@@ -1,0 +1,596 @@
+definitions:
+  github_com_kartik1pandey_conduit_services_conduit-core_internal_riskclient.Decision:
+    properties:
+      amount:
+        type: number
+      created_at:
+        type: string
+      currency:
+        type: string
+      decision:
+        type: string
+      id:
+        type: string
+      payment_intent_id:
+        type: string
+      reasons:
+        items:
+          type: string
+        type: array
+      risk_score:
+        type: number
+      stage:
+        type: string
+    type: object
+  github_com_kartik1pandey_conduit_services_conduit-core_internal_webhooksclient.Delivery:
+    properties:
+      attempt_count:
+        type: integer
+      created_at:
+        type: string
+      id:
+        type: string
+      last_response_status:
+        type: integer
+      status:
+        type: string
+    type: object
+  github_com_kartik1pandey_conduit_services_conduit-core_internal_webhooksclient.Endpoint:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: string
+      secret:
+        type: string
+      url:
+        type: string
+    type: object
+  internal_merchant.createRequest:
+    properties:
+      name:
+        type: string
+    type: object
+  internal_merchant.createResponse:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      publishable_key:
+        type: string
+      secret_key:
+        type: string
+    type: object
+  internal_merchant.verifySecretRequest:
+    properties:
+      secret_key:
+        type: string
+    type: object
+  internal_merchant.verifySecretResponse:
+    properties:
+      merchant_id:
+        type: string
+      name:
+        type: string
+    type: object
+  internal_paymentintent.PaymentIntent:
+    properties:
+      amount:
+        type: number
+      created_at:
+        type: string
+      currency:
+        type: string
+      description:
+        type: string
+      failure_reason:
+        type: string
+      id:
+        type: string
+      merchant_id:
+        type: string
+      status:
+        $ref: '#/definitions/internal_paymentintent.Status'
+      updated_at:
+        type: string
+    type: object
+  internal_paymentintent.Status:
+    enum:
+    - created
+    - pending
+    - succeeded
+    - failed
+    - refunded
+    type: string
+    x-enum-varnames:
+    - StatusCreated
+    - StatusPending
+    - StatusSucceeded
+    - StatusFailed
+    - StatusRefunded
+  internal_paymentintent.createRequest:
+    properties:
+      amount:
+        type: number
+      currency:
+        type: string
+      description:
+        type: string
+    type: object
+  internal_webhookendpoint.createRequest:
+    properties:
+      url:
+        type: string
+    type: object
+info:
+  contact:
+    name: Conduit
+  description: The payment API for Conduit, a test-mode payments infrastructure platform.
+    Mirrors Stripe's own object naming (payment_intents) and auth model (sk_test_/pk_test_
+    key pairs) deliberately.
+  license:
+    name: MIT
+  title: Conduit API
+  version: "1.0"
+paths:
+  /health:
+    get:
+      description: Returns 200 if Postgres and Redis are both reachable, 503 otherwise.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Health check
+      tags:
+      - health
+  /v1/merchants:
+    post:
+      consumes:
+      - application/json
+      description: Bootstraps a new test-mode merchant with an sk_test_/pk_test_ key
+        pair. The secret key is returned exactly once and never retrievable again
+        — only its hash is persisted.
+      parameters:
+      - description: Merchant name
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_merchant.createRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_merchant.createResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create a merchant
+      tags:
+      - merchants
+  /v1/merchants/verify-secret:
+    post:
+      consumes:
+      - application/json
+      description: Proves ownership of a merchant's sk_test_... key once and resolves
+        it to a merchant_id. Used by conduit-dashboard's signup flow — the raw key
+        is never stored afterward.
+      parameters:
+      - description: Secret key to verify
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_merchant.verifySecretRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_merchant.verifySecretResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Verify a merchant secret key
+      tags:
+      - merchants
+  /v1/payment_intents:
+    get:
+      description: Lists the authenticated merchant's payment intents, newest first.
+      parameters:
+      - description: Max results (default 50, capped at 200)
+        in: query
+        name: limit
+        type: integer
+      - description: Offset for pagination (default 0)
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/internal_paymentintent.PaymentIntent'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: List payment intents
+      tags:
+      - payment_intents
+    post:
+      consumes:
+      - application/json
+      description: Creates a new payment intent in the `created` state. Requires an
+        Idempotency-Key — a duplicate key returns the original response instead of
+        creating a second record.
+      parameters:
+      - description: Idempotency key
+        in: header
+        name: Idempotency-Key
+        required: true
+        type: string
+      - description: Payment intent details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_paymentintent.createRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_paymentintent.PaymentIntent'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Create a payment intent
+      tags:
+      - payment_intents
+  /v1/payment_intents/{id}:
+    get:
+      description: Fetches a payment intent by id, scoped to the authenticated merchant.
+        Returns 404 for another merchant's payment intent — never a 403 that would
+        confirm it exists.
+      parameters:
+      - description: Payment intent ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_paymentintent.PaymentIntent'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Get a payment intent
+      tags:
+      - payment_intents
+  /v1/payment_intents/{id}/confirm:
+    post:
+      description: Drives created|pending -> succeeded|failed. Scores the charge with
+        conduit-risk synchronously first; a decline transitions straight to failed
+        with no ledger entry ever created. An already-terminal payment intent is returned
+        as-is rather than reprocessed.
+      parameters:
+      - description: Idempotency key
+        in: header
+        name: Idempotency-Key
+        required: true
+        type: string
+      - description: Payment intent ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_paymentintent.PaymentIntent'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "502":
+          description: Bad Gateway
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Confirm a payment intent
+      tags:
+      - payment_intents
+  /v1/payment_intents/{id}/refund:
+    post:
+      description: Drives succeeded -> refunded, posting a second balanced ledger
+        transaction with entries reversed relative to the original charge. Only a
+        succeeded payment intent can be refunded.
+      parameters:
+      - description: Idempotency key
+        in: header
+        name: Idempotency-Key
+        required: true
+        type: string
+      - description: Payment intent ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_paymentintent.PaymentIntent'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "502":
+          description: Bad Gateway
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Refund a payment intent
+      tags:
+      - payment_intents
+  /v1/risk_decisions:
+    get:
+      description: Lists the authenticated merchant's risk-scoring history — every
+        decision and the reasons behind it — newest first.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/github_com_kartik1pandey_conduit_services_conduit-core_internal_riskclient.Decision'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: List risk decisions
+      tags:
+      - risk_decisions
+  /v1/webhook_endpoints:
+    get:
+      description: Lists every webhook endpoint registered for the authenticated merchant.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/github_com_kartik1pandey_conduit_services_conduit-core_internal_webhooksclient.Endpoint'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: List webhook endpoints
+      tags:
+      - webhook_endpoints
+    post:
+      consumes:
+      - application/json
+      description: Registers a URL to receive signed event deliveries. The response
+        includes a per-endpoint HMAC secret, shown once, used to sign the Conduit-Signature
+        header on every delivery to this URL.
+      parameters:
+      - description: Idempotency key
+        in: header
+        name: Idempotency-Key
+        required: true
+        type: string
+      - description: Endpoint URL
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_webhookendpoint.createRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/github_com_kartik1pandey_conduit_services_conduit-core_internal_webhooksclient.Endpoint'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Register a webhook endpoint
+      tags:
+      - webhook_endpoints
+  /v1/webhook_endpoints/{id}/deliveries:
+    get:
+      description: Lists delivery attempts for one webhook endpoint, scoped to the
+        authenticated merchant.
+      parameters:
+      - description: Webhook endpoint ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/github_com_kartik1pandey_conduit_services_conduit-core_internal_webhooksclient.Delivery'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: List an endpoint's deliveries
+      tags:
+      - webhook_endpoints
+securityDefinitions:
+  ApiKeyAuth:
+    description: Merchant secret key, sent as "Bearer sk_test_...". Obtained once
+      from POST /v1/merchants.
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"
