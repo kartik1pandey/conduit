@@ -53,6 +53,9 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     strategy:
+      # fail-fast: false — these are independent services; one failing
+      # shouldn't cancel the others mid-run and hide their real results.
+      fail-fast: false
       matrix:
         service: [conduit-core, conduit-ledger, conduit-webhooks, conduit-billing]
     steps:
@@ -84,7 +87,14 @@ jobs:
           export CONDUIT_LEDGER_URL="http://localhost:8002"
           export CONDUIT_WEBHOOKS_URL="http://localhost:8003"
           if [ -d cmd/migrate ]; then go run ./cmd/migrate; fi
-          go test ./... -race -cover
+          # -p 1: every package's integration tests share one Postgres
+          # database (conduit_test) and one Redis instance. `go test ./...`
+          # runs different packages concurrently by default, and two
+          # packages' setup TRUNCATEs can interleave and wipe out each
+          # other's in-flight rows — -p 1 runs packages one at a time so
+          # that can't happen. (Tests within a single package still run
+          # sequentially regardless, since none of them call t.Parallel().)
+          go test ./... -race -cover -p 1
 
   test-risk-service:
     runs-on: ubuntu-latest

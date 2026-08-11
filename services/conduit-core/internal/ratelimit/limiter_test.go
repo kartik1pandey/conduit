@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
@@ -26,7 +27,12 @@ func TestLimiter_AllowsUpToCapacityThenBlocks(t *testing.T) {
 	client := setupClient(t)
 	limiter := New(client, 3) // capacity 3, refills at 3/60 = 0.05 tokens/sec — negligible over this test's duration
 	ctx := context.Background()
-	key := "test-key-" + t.Name()
+	// A uuid suffix, not just t.Name(), keeps this test correct even when
+	// Redis isn't freshly flushed between runs (e.g. a developer re-running
+	// `go test` locally against a persistent Redis) — a deterministic key
+	// would silently inherit a near-empty bucket left over from the
+	// previous run instead of starting fresh.
+	key := "test-key-" + t.Name() + "-" + uuid.NewString()
 
 	for i := 0; i < 3; i++ {
 		allowed, err := limiter.Allow(ctx, key)
@@ -43,8 +49,8 @@ func TestLimiter_KeysAreIndependent(t *testing.T) {
 	client := setupClient(t)
 	limiter := New(client, 1)
 	ctx := context.Background()
-	keyA := "test-key-a-" + t.Name()
-	keyB := "test-key-b-" + t.Name()
+	keyA := "test-key-a-" + t.Name() + "-" + uuid.NewString()
+	keyB := "test-key-b-" + t.Name() + "-" + uuid.NewString()
 
 	allowed, err := limiter.Allow(ctx, keyA)
 	require.NoError(t, err)
