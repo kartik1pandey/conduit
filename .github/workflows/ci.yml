@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  # Same hooks as the local pre-commit hook, run again here so a `--no-verify`
+  # commit (or a contributor who never ran `pre-commit install`) can't skip
+  # hygiene/secret-scanning checks and still merge.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: pre-commit/action@v3.0.1
+
+  # One job per service, each a no-op until that service has real source and
+  # a manifest file (go.mod / pyproject.toml / package.json) to key off of.
+  # This keeps the workflow honest about what's actually tested today instead
+  # of hardcoding `go test ./...` against directories that don't build yet.
+  test-go-services:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [conduit-core, conduit-ledger, conduit-webhooks, conduit-billing]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for go.mod
+        id: check
+        run: |
+          if [ -f "services/${{ matrix.service }}/go.mod" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-go@v5
+        if: steps.check.outputs.exists == 'true'
+        with:
+          go-version-file: services/${{ matrix.service }}/go.mod
+      - name: go test
+        if: steps.check.outputs.exists == 'true'
+        working-directory: services/${{ matrix.service }}
+        run: go test ./... -race -cover
+
+  test-risk-service:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for pyproject.toml
+        id: check
+        run: |
+          if [ -f "services/conduit-risk/pyproject.toml" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-python@v5
+        if: steps.check.outputs.exists == 'true'
+        with:
+          python-version: "3.12"
+      - name: pytest
+        if: steps.check.outputs.exists == 'true'
+        working-directory: services/conduit-risk
+        run: |
+          pip install -e ".[dev]"
+          pytest
+
+  test-dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for package.json
+        id: check
+        run: |
+          if [ -f "services/conduit-dashboard/package.json" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-node@v4
+        if: steps.check.outputs.exists == 'true'
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: services/conduit-dashboard/package-lock.json
+      - name: npm test
+        if: steps.check.outputs.exists == 'true'
+        working-directory: services/conduit-dashboard
+        run: |
+          npm ci
+          npm test
