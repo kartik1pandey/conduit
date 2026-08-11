@@ -1,4 +1,4 @@
-module github.com/kartik1pandey/conduit/services/conduit-ledger
+module github.com/kartik1pandey/conduit/services/conduit-webhooks
 
 go 1.26.5
 
@@ -7,7 +7,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/redis/go-redis/v9 v9.22.0
-	github.com/shopspring/decimal v1.4.0
 	github.com/stretchr/testify v1.11.1
 )
 

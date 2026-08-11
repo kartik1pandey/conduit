@@ -1,4 +1,5 @@
-// Command server runs the conduit-ledger HTTP API.
+// Command server runs the conduit-webhooks HTTP API and its background
+// delivery-retry worker.
 package main
 
 import (
@@ -12,11 +13,11 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/kartik1pandey/conduit/services/conduit-ledger/internal/authn"
-	"github.com/kartik1pandey/conduit/services/conduit-ledger/internal/config"
-	"github.com/kartik1pandey/conduit/services/conduit-ledger/internal/db"
-	"github.com/kartik1pandey/conduit/services/conduit-ledger/internal/ledger"
-	"github.com/kartik1pandey/conduit/services/conduit-ledger/migrations"
+	"github.com/kartik1pandey/conduit/services/conduit-webhooks/internal/authn"
+	"github.com/kartik1pandey/conduit/services/conduit-webhooks/internal/config"
+	"github.com/kartik1pandey/conduit/services/conduit-webhooks/internal/db"
+	"github.com/kartik1pandey/conduit/services/conduit-webhooks/internal/webhook"
+	"github.com/kartik1pandey/conduit/services/conduit-webhooks/migrations"
 )
 
 func main() {
@@ -48,8 +49,11 @@ func main() {
 		log.Fatalf("connecting to redis: %v", err)
 	}
 
-	store := ledger.NewStore(pool, redisClient)
-	handlers := ledger.NewHandlers(store)
+	store := webhook.NewStore(pool)
+	queue := webhook.NewRetryQueue(redisClient)
+	deliverer := webhook.NewDeliverer(cfg.DeliveryTimeout)
+	worker := webhook.NewWorker(store, queue, deliverer, cfg.MaxDeliveryAttempts)
+	handlers := webhook.NewHandlers(store, worker)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", healthHandler(store, redisClient))
@@ -62,8 +66,10 @@ func main() {
 		Addr:         ":" + cfg.Port,
 		Handler:      mux,
 		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: 15 * time.Second,
 	}
+
+	go runRetryLoop(ctx, worker)
 
 	go func() {
 		<-ctx.Done()
@@ -72,13 +78,33 @@ func main() {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("conduit-ledger listening on :%s", cfg.Port)
+	log.Printf("conduit-webhooks listening on :%s", cfg.Port)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("server error: %v", err)
 	}
 }
 
-func healthHandler(store *ledger.Store, redisClient *redis.Client) http.HandlerFunc {
+// runRetryLoop is the production wrapper around Worker.ProcessOnce — a
+// plain ticker, not a message queue consumer, since Worker.ProcessOnce
+// already pulls exactly the currently-due work from Redis each time. Tests
+// call ProcessOnce directly instead of running this loop, so they can
+// control time deterministically.
+func runRetryLoop(ctx context.Context, worker *webhook.Worker) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := worker.ProcessOnce(ctx); err != nil {
+				log.Printf("webhooks: retry loop error: %v", err)
+			}
+		}
+	}
+}
+
+func healthHandler(store *webhook.Store, redisClient *redis.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()

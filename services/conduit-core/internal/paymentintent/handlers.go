@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -12,15 +13,17 @@ import (
 
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/authn"
 	"github.com/kartik1pandey/conduit/services/conduit-core/internal/ledgerclient"
+	"github.com/kartik1pandey/conduit/services/conduit-core/internal/webhooksclient"
 )
 
 type Handlers struct {
-	store  *Store
-	ledger *ledgerclient.Client
+	store    *Store
+	ledger   *ledgerclient.Client
+	webhooks *webhooksclient.Client
 }
 
-func NewHandlers(store *Store, ledger *ledgerclient.Client) *Handlers {
-	return &Handlers{store: store, ledger: ledger}
+func NewHandlers(store *Store, ledger *ledgerclient.Client, webhooks *webhooksclient.Client) *Handlers {
+	return &Handlers{store: store, ledger: ledger, webhooks: webhooks}
 }
 
 // Register mounts every payment_intents route on mux. GET needs no
@@ -151,7 +154,26 @@ func (h *Handlers) confirm(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "payment intent status changed concurrently, retry")
 		return
 	}
+
+	// Best-effort: whether a merchant's webhook endpoint could be notified
+	// is never a reason to fail a payment that already succeeded. A
+	// conduit-webhooks outage degrades notification latency, not payments.
+	h.emitPaymentSucceeded(r.Context(), merchantID, pi)
+
 	writeJSON(w, http.StatusOK, pi)
+}
+
+func (h *Handlers) emitPaymentSucceeded(ctx context.Context, merchantID uuid.UUID, pi PaymentIntent) {
+	idempotencyKey := "confirm:" + pi.ID.String() + ":succeeded"
+	data := map[string]any{
+		"payment_intent_id": pi.ID,
+		"amount":            pi.Amount.StringFixed(2),
+		"currency":          pi.Currency,
+		"status":            pi.Status,
+	}
+	if err := h.webhooks.Emit(ctx, merchantID, "payment.succeeded", idempotencyKey, data); err != nil {
+		log.Printf("paymentintent: could not emit payment.succeeded for %s: %v", pi.ID, err)
+	}
 }
 
 func (h *Handlers) postToLedger(ctx context.Context, merchantID uuid.UUID, pi PaymentIntent) error {

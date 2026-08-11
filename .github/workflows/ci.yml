@@ -23,12 +23,12 @@ jobs:
   # This keeps the workflow honest about what's actually tested today instead
   # of hardcoding `go test ./...` against directories that don't build yet.
   #
-  # A real Postgres runs as a service container so integration tests
+  # A real Postgres and Redis run as service containers so integration tests
   # actually execute here, not just skip: locally they skip when their
-  # DATABASE_URL env var is unset (see e.g.
+  # DATABASE_URL/REDIS_URL env vars are unset (see e.g.
   # conduit-ledger/internal/ledger/repository_test.go), which is correct for
-  # a laptop with no DB running, but would make this job silently useless if
-  # CI didn't provide one.
+  # a laptop with nothing running locally, but would make this job silently
+  # useless if CI didn't provide them.
   test-go-services:
     runs-on: ubuntu-latest
     services:
@@ -44,7 +44,18 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
     strategy:
+      # fail-fast: false — these are independent services; one failing
+      # shouldn't cancel the others mid-run and hide their real results.
+      fail-fast: false
       matrix:
         service: [conduit-core, conduit-ledger, conduit-webhooks, conduit-billing]
     steps:
@@ -72,9 +83,18 @@ jobs:
             conduit-billing) export BILLING_DATABASE_URL="postgres://conduit:conduit@localhost:5432/conduit_test" ;;
           esac
           export INTERNAL_JWT_SECRET="ci-test-secret-not-real"
+          export REDIS_URL="redis://localhost:6379"
           export CONDUIT_LEDGER_URL="http://localhost:8002"
+          export CONDUIT_WEBHOOKS_URL="http://localhost:8003"
           if [ -d cmd/migrate ]; then go run ./cmd/migrate; fi
-          go test ./... -race -cover
+          # -p 1: every package's integration tests share one Postgres
+          # database (conduit_test) and one Redis instance. `go test ./...`
+          # runs different packages concurrently by default, and two
+          # packages' setup TRUNCATEs can interleave and wipe out each
+          # other's in-flight rows — -p 1 runs packages one at a time so
+          # that can't happen. (Tests within a single package still run
+          # sequentially regardless, since none of them call t.Parallel().)
+          go test ./... -race -cover -p 1
 
   test-risk-service:
     runs-on: ubuntu-latest

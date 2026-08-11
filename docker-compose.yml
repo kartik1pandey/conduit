@@ -30,15 +30,33 @@ services:
     build: ./services/conduit-ledger
     env_file: .env
     environment:
-      # .env's LEDGER_DATABASE_URL points at localhost, for running the
+      # .env's *_DATABASE_URL/REDIS_URL point at localhost, for running the
       # binary directly on the host. Inside the compose network, services
-      # reach Postgres by service name instead — override just this one key.
+      # reach Postgres/Redis by service name instead — override just these keys.
       LEDGER_DATABASE_URL: postgres://conduit:conduit@postgres:5432/conduit_ledger
+      REDIS_URL: redis://redis:6379
       CONDUIT_LEDGER_PORT: "8002"
     ports:
       - "8002:8002"
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  conduit-webhooks:
+    build: ./services/conduit-webhooks
+    env_file: .env
+    environment:
+      WEBHOOKS_DATABASE_URL: postgres://conduit:conduit@postgres:5432/conduit_webhooks
+      REDIS_URL: redis://redis:6379
+      CONDUIT_WEBHOOKS_PORT: "8003"
+    ports:
+      - "8003:8003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   conduit-core:
@@ -46,7 +64,9 @@ services:
     env_file: .env
     environment:
       CORE_DATABASE_URL: postgres://conduit:conduit@postgres:5432/conduit_core
+      REDIS_URL: redis://redis:6379
       CONDUIT_LEDGER_URL: http://conduit-ledger:8002
+      CONDUIT_WEBHOOKS_URL: http://conduit-webhooks:8003
       CONDUIT_CORE_PORT: "8000"
     ports:
       - "8000:8000"
@@ -57,9 +77,11 @@ services:
         condition: service_healthy
       conduit-ledger:
         condition: service_started
+      conduit-webhooks:
+        condition: service_started
 
   # --- Add each remaining service below as it's built. Same shape as above:
-  # (repeat the pattern for conduit-risk, conduit-webhooks, conduit-billing, conduit-dashboard)
+  # (repeat the pattern for conduit-risk, conduit-billing, conduit-dashboard)
 
 volumes:
   conduit_postgres_data:
