@@ -1,0 +1,204 @@
+services:
+  # --- Internal-only services: no public traffic, reached over Render's
+  # private network by conduit-core (and by each other where the local
+  # docker-compose topology already has them talking directly, e.g.
+  # conduit-risk -> its own OPA sidecar). ---
+
+  - type: pserv
+    name: opa-risk
+    runtime: docker
+    plan: free
+    region: oregon
+    rootDir: services/conduit-risk
+    dockerfilePath: services/conduit-risk/Dockerfile.opa
+    envVars:
+      - key: PORT
+        value: "8181"
+
+  - type: pserv
+    name: opa-dashboard
+    runtime: docker
+    plan: free
+    region: oregon
+    rootDir: services/conduit-dashboard
+    dockerfilePath: services/conduit-dashboard/Dockerfile.opa
+    envVars:
+      - key: PORT
+        value: "8181"
+
+  - type: pserv
+    name: conduit-ledger
+    runtime: docker
+    plan: free
+    region: oregon
+    rootDir: services/conduit-ledger
+    envVars:
+      - key: PORT
+        value: "8002"
+      - key: CONDUIT_LEDGER_PORT
+        value: "8002"
+      - key: LEDGER_DATABASE_URL
+        sync: false # filled in once the shared Postgres instance's per-service logical database exists — see RELIABILITY.md's deployment notes
+      - key: REDIS_URL
+        fromService:
+          name: conduit-redis
+          type: keyvalue
+          property: connectionString
+      - fromGroup: conduit-internal-jwt
+
+  - type: pserv
+    name: conduit-webhooks
+    runtime: docker
+    plan: free
+    region: oregon
+    rootDir: services/conduit-webhooks
+    envVars:
+      - key: PORT
+        value: "8003"
+      - key: CONDUIT_WEBHOOKS_PORT
+        value: "8003"
+      - key: WEBHOOKS_DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          name: conduit-redis
+          type: keyvalue
+          property: connectionString
+      - key: WEBHOOK_MAX_RETRIES
+        value: "8"
+      - fromGroup: conduit-internal-jwt
+
+  - type: pserv
+    name: conduit-billing
+    runtime: docker
+    plan: free
+    region: oregon
+    rootDir: services/conduit-billing
+    envVars:
+      - key: PORT
+        value: "8004"
+      - key: CONDUIT_BILLING_PORT
+        value: "8004"
+      - key: BILLING_DATABASE_URL
+        sync: false
+      - fromGroup: conduit-internal-jwt
+
+  - type: pserv
+    name: conduit-risk
+    runtime: docker
+    plan: free
+    region: oregon
+    rootDir: services/conduit-risk
+    envVars:
+      - key: PORT
+        value: "8001"
+      - key: CONDUIT_RISK_PORT
+        value: "8001"
+      - key: RISK_DATABASE_URL
+        sync: false
+      - key: OPA_URL
+        value: http://opa-risk:8181
+      - fromGroup: conduit-internal-jwt
+
+  # --- Public-facing services. Both free-tier, so per Render's own
+  # private-networking rules a free web service can send private traffic
+  # but cannot receive it — conduit-dashboard therefore reaches
+  # conduit-core over its PUBLIC url (CONDUIT_CORE_URL, filled in below
+  # once core's Render-assigned domain is known), the same as any other
+  # client of conduit-core's public API. ---
+
+  - type: web
+    name: conduit-core
+    runtime: docker
+    plan: free
+    region: oregon
+    rootDir: services/conduit-core
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "8000"
+      - key: CONDUIT_CORE_PORT
+        value: "8000"
+      - key: CORE_DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          name: conduit-redis
+          type: keyvalue
+          property: connectionString
+      - key: CONDUIT_LEDGER_URL
+        value: http://conduit-ledger:8002
+      - key: CONDUIT_WEBHOOKS_URL
+        value: http://conduit-webhooks:8003
+      - key: CONDUIT_RISK_URL
+        value: http://conduit-risk:8001
+      - key: CONDUIT_BILLING_URL
+        value: http://conduit-billing:8004
+      - key: IDEMPOTENCY_KEY_TTL_HOURS
+        value: "24"
+      - key: RATE_LIMIT_REQUESTS_PER_MINUTE
+        value: "100"
+      - fromGroup: conduit-internal-jwt
+      - fromGroup: conduit-dashboard-session
+
+  - type: web
+    name: conduit-dashboard
+    runtime: docker
+    plan: free
+    region: oregon
+    rootDir: services/conduit-dashboard
+    healthCheckPath: /health
+    envVars:
+      - key: DASHBOARD_DATABASE_URL
+        sync: false
+      - key: DASHBOARD_OPA_URL
+        value: http://opa-dashboard:8181
+      - key: CONDUIT_CORE_URL
+        sync: false # conduit-core's public https://...onrender.com URL, filled in once assigned
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: AUTH_GITHUB_ID
+        sync: false # optional — leave as a placeholder if you don't want to wire up a real GitHub OAuth App; email/password login works regardless
+      - key: AUTH_GITHUB_SECRET
+        sync: false
+      - fromGroup: conduit-dashboard-session
+
+  - type: keyvalue
+    name: conduit-redis
+    plan: free
+    maxmemoryPolicy: noeviction
+    ipAllowList: [] # private-network only; nothing outside this project needs to reach it
+
+databases:
+  # One free Postgres instance hosting a separate logical database per
+  # service (conduit_core, conduit_ledger, ...), mirroring the local
+  # docker-compose topology exactly — see infra/postgres-init/01-create-databases.sql.
+  # Render's Blueprint model provisions one full Postgres *instance* per
+  # `databases` entry, so the per-service databases are created once,
+  # after this instance exists, via a one-time psql script rather than as
+  # separate Blueprint entries (which would mean 6 separate paid-after-trial
+  # instances instead of 6 databases on 1 free one).
+  - name: conduit-postgres
+    databaseName: conduit
+    plan: free
+    region: oregon
+
+envVarGroups:
+  # Shared by every service that signs or verifies the internal
+  # service-to-service JWT (core signs; ledger/risk/webhooks/billing
+  # verify). generateValue at the group level generates the value once —
+  # every service referencing the group via fromGroup gets the SAME value,
+  # which HMAC verification requires.
+  - name: conduit-internal-jwt
+    envVars:
+      - key: INTERNAL_JWT_SECRET
+        generateValue: true
+
+  # Shared only by the two services that actually use this trust boundary:
+  # core verifies, dashboard signs. Kept separate from conduit-internal-jwt
+  # so conduit-ledger/risk/webhooks/billing never receive a secret they
+  # have no use for.
+  - name: conduit-dashboard-session
+    envVars:
+      - key: DASHBOARD_SESSION_SECRET
+        generateValue: true
