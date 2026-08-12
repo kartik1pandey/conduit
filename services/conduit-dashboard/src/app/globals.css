@@ -67,6 +67,20 @@ body {
   font-family: var(--font-body), Arial, Helvetica, sans-serif;
 }
 
+/* A visible keyboard-focus indicator on every interactive element —
+   removing :focus's default outline (as several inputs do, in favor of
+   a border-color change) is only acceptable if something replaces it;
+   this is that replacement, applied globally rather than per-component. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* Payment amounts and IDs shift under a proportional font as digits
    change width — tabular figures keep tables and stat cards from
    jittering on every re-render. */
@@ -121,7 +135,11 @@ h3,
   --l-border: rgba(255, 255, 255, 0.1);
   --l-muted: rgba(255, 255, 255, 0.6);
   --l-foreground: #ffffff;
-  --l-accent: #7c6cf5;
+  /* #6250ee, not the lighter #7c6cf5 this started as — white text on the
+     lighter shade only hit 3.94:1 against WCAG AA's 4.5:1 minimum for
+     normal-size text, caught by the automated axe scan in
+     e2e/accessibility.spec.ts rather than eyeballing it. */
+  --l-accent: #6250ee;
 }
 
 .bg-mesh {
