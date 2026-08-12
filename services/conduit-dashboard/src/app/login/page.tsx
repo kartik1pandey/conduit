@@ -65,7 +65,7 @@ export default function LoginPage() {
 
           <p className="mt-4 text-sm text-[var(--muted)]">
             Need to set up dashboard access?{" "}
-            <Link href="/signup" className="text-[var(--accent)]">
+            <Link href="/signup" className="text-[var(--accent)] underline">
               Claim your merchant
             </Link>
           </p>

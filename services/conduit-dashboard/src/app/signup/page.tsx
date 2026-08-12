@@ -43,7 +43,7 @@ export default function SignupPage() {
 
           <p className="mt-4 text-sm text-[var(--muted)]">
             Already have an account?{" "}
-            <Link href="/login" className="text-[var(--accent)]">
+            <Link href="/login" className="text-[var(--accent)] underline">
               Log in
             </Link>
           </p>
